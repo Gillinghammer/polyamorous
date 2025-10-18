@@ -58,11 +58,21 @@ class PolyApp(App):
 
     RichLog#research-log {
         border: round #2c3340;
-        height: 16;
+        height: 18;
+        width: 2fr;   /* occupy more horizontal space */
     }
 
     ProgressBar#research-progress {
         margin-bottom: 1;
+    }
+
+    Vertical#research-left {
+        width: 1fr;   /* side panel for title/status/spinner */
+        min-width: 40;
+    }
+
+    Static#research-status {
+        color: #7a8699;
     }
 
     Static#decision-summary {
@@ -118,10 +128,13 @@ class PolyApp(App):
                 yield DataTable(id="polls-table", zebra_stripes=True)
                 yield Static("Select a poll and press Enter to start research.", id="polls-hint")
             with TabPane("Research", id="research"):
-                yield Static("No poll selected", id="research-title")
-                yield ProgressBar(total=4, id="research-progress")
-                yield LoadingIndicator(id="research-spinner")
-                yield RichLog(id="research-log")
+                with Horizontal():
+                    with Vertical(id="research-left" ):
+                        yield Static("No poll selected", id="research-title")
+                        yield ProgressBar(total=4, id="research-progress")
+                        yield Static("Waiting to start…", id="research-status")
+                        yield LoadingIndicator(id="research-spinner")
+                    yield RichLog(id="research-log")
             with TabPane("Decision", id="decision"):
                 yield Markdown("Awaiting research results...", id="decision-summary")
                 with Horizontal(id="decision-actions"):
@@ -236,6 +249,8 @@ class PolyApp(App):
         progress.update(progress=0, total=4)
         spinner = self.query_one("#research-spinner", LoadingIndicator)
         spinner.display = True
+        status = self.query_one("#research-status", Static)
+        status.update("Starting…")
         log = self.query_one("#research-log", RichLog)
         log.clear()
 
@@ -278,6 +293,12 @@ class PolyApp(App):
         log.write(progress.message)
         bar = self.query_one("#research-progress", ProgressBar)
         bar.update(progress=progress.round_number, total=progress.total_rounds)
+        status = self.query_one("#research-status", Static)
+        if progress.completed:
+            status.update("Complete")
+        else:
+            pct = int(100 * (progress.round_number / max(progress.total_rounds, 1)))
+            status.update(f"{pct}%")
         if progress.completed:
             spinner = self.query_one("#research-spinner", LoadingIndicator)
             spinner.display = False
