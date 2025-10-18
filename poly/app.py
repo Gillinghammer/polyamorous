@@ -184,12 +184,18 @@ class PolyApp(App):
         self._render_dashboard(metrics)
 
     def _render_dashboard(self, metrics: PortfolioMetrics) -> None:
+        # Compute research spend from recent results we tracked in-session
+        spend = 0.0
+        if self._research_result and self._research_result.estimated_cost_usd:
+            spend += float(self._research_result.estimated_cost_usd)
+
         summary = (
             f"Active Positions: {metrics.active_positions}\n"
             f"Win Rate: {metrics.win_rate:.1%}\n"
             f"Total Profit: ${metrics.total_profit:,.2f}\n"
             f"Average Profit: ${metrics.average_profit:,.2f}\n"
-            f"Projected APR: {metrics.projected_apr:.1%}"
+            f"Projected APR: {metrics.projected_apr:.1%}\n"
+            f"Research Spend (this session): ${spend:,.4f}"
         )
         summary_widget = self.query_one("#metrics-summary", Static)
         summary_widget.update(summary)

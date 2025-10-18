@@ -31,7 +31,7 @@ class ResearchService:
         self,
         market: Market,
         callback: ProgressCallback,
-        rounds: int = 6,
+        rounds: int | None = None,
     ) -> ResearchResult:
         """Run research asynchronously with Grok streaming and produce structured output."""
 
@@ -41,8 +41,9 @@ class ResearchService:
             raise RuntimeError(
                 "Grok client unavailable. Set XAI_API_KEY and install xai-sdk to enable research."
             )
+        chosen_rounds = int(rounds) if rounds is not None else int(self.config.default_rounds)
 
-        result = await self._run_with_grok(market, callback, rounds)
+        result = await self._run_with_grok(market, callback, chosen_rounds)
 
         duration = datetime.now(tz=timezone.utc) - start
         return ResearchResult(
@@ -53,9 +54,13 @@ class ResearchService:
             rationale=result["rationale"],
             key_findings=result["key_findings"],
             citations=result["citations"],
-            rounds_completed=rounds,
+            rounds_completed=chosen_rounds,
             created_at=start,
             duration_minutes=max(1, int(duration.total_seconds() // 60)),
+            prompt_tokens=result.get("prompt_tokens"),
+            completion_tokens=result.get("completion_tokens"),
+            reasoning_tokens=result.get("reasoning_tokens"),
+            estimated_cost_usd=result.get("estimated_cost_usd"),
         )
 
     def _build_client(self):
@@ -90,17 +95,32 @@ class ResearchService:
         user_fn = getattr(chat_module, "user")
         web_search = getattr(tools_module, "web_search")
         x_search = getattr(tools_module, "x_search")
+        code_exec = getattr(tools_module, "code_execution", None)
 
         client = self._build_client()
+
+        tool_instances = []
+        # Use unfiltered tools to encourage diverse discovery, with optional media understanding
+        ws_kwargs = {"enable_image_understanding": bool(self.config.enable_image_understanding)}
+        xs_kwargs = {
+            "enable_image_understanding": bool(self.config.enable_image_understanding),
+            "enable_video_understanding": bool(self.config.enable_video_understanding),
+        }
+        tool_instances.append(web_search(**ws_kwargs))
+        tool_instances.append(x_search(**xs_kwargs))
+
+        # Optional code execution
+        if self.config.enable_code_execution and code_exec is not None:
+            tool_instances.append(code_exec())
+
         chat = client.chat.create(
-            model="grok-4-fast",
-            tools=[web_search(), x_search()],
+            model=str(self.config.model_name or "grok-4-fast"),
+            tools=tool_instances,
         )
 
-        prompt = _build_prompt(market)
-        chat.append(user_fn(prompt))
-
         total_rounds = rounds
+        prompt = _build_prompt(market, self.config, total_rounds)
+        chat.append(user_fn(prompt))
         current_round = 0
         findings: list[str] = []
         citations: list[str] = []
@@ -110,25 +130,48 @@ class ResearchService:
         async for response, chunk in chat.stream():
             if getattr(chunk, "tool_calls", None):
                 current_round = min(total_rounds, current_round + 1)
-                message = f"Round {current_round}/{total_rounds}: {chunk.tool_calls[0].function.name}"
+                try:
+                    func = chunk.tool_calls[0].function
+                    args_preview = str(func.arguments)
+                    if len(args_preview) > 120:
+                        args_preview = args_preview[:117] + "..."
+                    message = f"Round {current_round}/{total_rounds}: {func.name} {args_preview}"
+                except Exception:
+                    message = f"Round {current_round}/{total_rounds}: tool_call"
                 callback(ResearchProgress(message=message, round_number=current_round, total_rounds=total_rounds))
                 findings.append(message)
 
             if getattr(chunk, "content", None):
                 findings.append(chunk.content)
 
+            # Show thinking progress when available
+            usage = getattr(response, "usage", None)
+            if usage and getattr(usage, "reasoning_tokens", None):
+                callback(ResearchProgress(
+                    message=f"Thinking... ({usage.reasoning_tokens} reasoning tokens)",
+                    round_number=current_round,
+                    total_rounds=total_rounds,
+                ))
+
             if response and getattr(response, "citations", None):
                 citations = list(response.citations)
             final_response = response
 
-        callback(
-            ResearchProgress(
-                message="Grok synthesis complete. Generating structured output...",
-                round_number=total_rounds,
-                total_rounds=total_rounds,
-                completed=True,
-            )
-        )
+        # Final usage summary if available
+        final_message = "Grok synthesis complete. Generating structured output..."
+        try:
+            usage_summary = getattr(final_response, "server_side_tool_usage", None)
+            if usage_summary:
+                final_message += f" Tools used: {dict(usage_summary)}"
+        except Exception:
+            pass
+
+        callback(ResearchProgress(
+            message=final_message,
+            round_number=total_rounds,
+            total_rounds=total_rounds,
+            completed=True,
+        ))
 
         # Retrieve final content from the streamed response (avoid extra call)
         content = getattr(final_response, "content", "")
@@ -143,6 +186,25 @@ class ResearchService:
                 "key_findings": findings[-10:],
             }
 
+        # Usage and cost estimation (best-effort; fields may vary by SDK version)
+        usage = getattr(final_response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+        completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        reasoning_tokens = getattr(usage, "reasoning_tokens", None) if usage else None
+
+        estimated_cost = None
+        try:
+            cost = 0.0
+            if prompt_tokens and self.config.prompt_token_price_per_1k:
+                cost += (float(prompt_tokens) / 1000.0) * float(self.config.prompt_token_price_per_1k)
+            if completion_tokens and self.config.completion_token_price_per_1k:
+                cost += (float(completion_tokens) / 1000.0) * float(self.config.completion_token_price_per_1k)
+            if reasoning_tokens and self.config.reasoning_token_price_per_1k:
+                cost += (float(reasoning_tokens) / 1000.0) * float(self.config.reasoning_token_price_per_1k)
+            estimated_cost = round(cost, 6)
+        except Exception:
+            estimated_cost = None
+
         result = {
             "prediction": str(parsed.get("prediction", "Yes")),
             "probability": float(parsed.get("probability", 0.5)),
@@ -150,6 +212,10 @@ class ResearchService:
             "rationale": str(parsed.get("rationale", ""))[:5000],
             "key_findings": list(parsed.get("key_findings", findings))[-20:],
             "citations": citations,
+            "prompt_tokens": int(prompt_tokens) if isinstance(prompt_tokens, (int, float)) else None,
+            "completion_tokens": int(completion_tokens) if isinstance(completion_tokens, (int, float)) else None,
+            "reasoning_tokens": int(reasoning_tokens) if isinstance(reasoning_tokens, (int, float)) else None,
+            "estimated_cost_usd": estimated_cost,
         }
 
         # Close client to prevent pending tasks on loop shutdown
@@ -161,26 +227,43 @@ class ResearchService:
         return result
 
 
-def _build_prompt(market: Market) -> str:
-    """Return a professional agentic research prompt optimized for Grok tools."""
+def _build_prompt(market: Market, config: ResearchConfig, total_rounds: int) -> str:
+    """Return a professional agentic research prompt optimized for Grok tools.
+
+    Includes meta topic planning, X-source weighting, and odds-relative synthesis.
+    """
 
     odds = ", ".join(f"{name}: {price:.0%}" for name, price in market.formatted_odds().items())
     options = ", ".join(market.formatted_odds().keys()) or "Yes, No"
+    # Scoping removed by default for broader discovery
+    domain_scope = ""
+    x_scope = ""
+
+    topic_range = f"{config.topic_count_min}-{config.topic_count_max}"
+
     return (
         "You are a professional prediction market analyst. Your task is to research a Polymarket poll and surface asymmetric information that the market may be missing.\n\n"
         f"Poll Question: {market.question}\n"
         f"Options: {options}\n"
         f"Current Market Odds: {odds}\n"
         f"Resolves At: {market.end_date.isoformat()}\n\n"
-        "Use server-side tools aggressively: web_search() for news/analysis/data and x_search() for real-time sentiment and insider knowledge.\n"
-        "Prioritize: primary sources, expert analysis, recent developments, credible leaks/insider signals.\n"
-        "Evaluate sentiment vs facts, detect narrative shifts, and identify crowd wisdom patterns on X (accounts, communities, engagement).\n"
-        "Look for catalysts, timelines, dependencies, and leading indicators.\n\n"
+        "Meta plan first (do not skip): Generate a concise list of "
+        f"{topic_range} research topics/questions that, if answered, would materially change implied odds. "
+        "For each topic, specify whether to use web_search, x_search, or both, and why.\n\n"
+        "X-source weighting: Identify qualified voices on X (credentials, domain expertise, past track record). "
+        "Incorporate engagement signals (likes, reposts, replies, quote-tweets) as soft evidence of salience, not truth. "
+        "Assign a trust score (0-1) combining author credibility and engagement quality. Prioritize diverse perspectives and surface contrarian but credible takes.\n\n"
+        "Tool usage: Use server-side tools aggressively: web_search() for mainstream sources and x_search() for real-time nuance and insider signals.\n\n"
+        "When quantitative checks are needed (e.g., averages, regressions, aggregation), call code_execution to compute and verify rather than estimating.\n\n"
         "Working style:\n"
-        "- Iterate in multiple rounds.\n"
-        "- Cross-check claims.\n"
+        f"- Iterate in multiple rounds (target: {total_rounds}).\n"
+        "- Cross-check claims and flag contradictions.\n"
         "- Note unknowns and failure modes.\n"
         "- Stop only when information is saturated or diminishing returns.\n\n"
+        "Synthesis requirements (tie to odds):\n"
+        "- Convert findings into a probability for the most likely option (0-1).\n"
+        "- Compare to current market odds; highlight where mainstream vs X perspectives diverge and why.\n"
+        "- Call out catalysts/timelines that can move odds before resolution.\n\n"
         "At the end, output ONLY a compact JSON object with keys: \n"
         "{\"prediction\": string (the option most likely), \n"
         " \"probability\": number (0-1), \n"

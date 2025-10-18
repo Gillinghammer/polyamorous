@@ -45,11 +45,7 @@ chat = client.chat.create(
 **Advanced Web Search Options:**
 
 ```python
-# Restrict to specific domains
-web_search(allowed_domains=["wikipedia.org", "reuters.com"])
-
-# Exclude specific domains
-web_search(excluded_domains=["example.com"])
+# Scoping removed in app defaults to encourage broader discovery
 
 # Enable image understanding (increases token usage)
 web_search(enable_image_understanding=True)
@@ -70,18 +66,7 @@ chat = client.chat.create(
 **Advanced X Search Options:**
 
 ```python
-# Filter by specific X handles
-x_search(allowed_x_handles=["elonmusk", "xai"])
-
-# Exclude specific X handles
-x_search(excluded_x_handles=["spam_account"])
-
-# Filter by date range
-from datetime import datetime
-x_search(
-    from_date=datetime(2025, 1, 1),
-    to_date=datetime(2025, 10, 18)
-)
+# Scoping by handles/date is not used by default in app; enable only if needed
 
 # Enable image understanding
 x_search(enable_image_understanding=True)

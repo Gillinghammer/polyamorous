@@ -67,6 +67,11 @@ class ResearchResult:
     rounds_completed: int
     created_at: datetime
     duration_minutes: int
+    # Usage and cost estimation
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 @dataclass(slots=True)
@@ -100,3 +105,5 @@ class PortfolioMetrics:
     average_profit: float
     projected_apr: float
     recent_trades: List[Trade]
+    # Aggregate research spend for the session/app lifetime (not persisted yet)
+    research_spend_usd: float = 0.0

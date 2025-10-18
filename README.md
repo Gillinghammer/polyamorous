@@ -11,7 +11,7 @@ A Python TUI (Terminal User Interface) application for researching Polymarket po
 pip install -e .
 ```
 
-### Configuration (Optional)
+### Configuration (Required)
 
 Set up your xAI API key for Grok research:
 
@@ -24,7 +24,7 @@ Or create a `.env` file in the project root:
 XAI_API_KEY=your_xai_api_key_here
 ```
 
-> **Note**: The app works without an API key using offline sample data and simulated research.
+> Note: Research requires a valid xAI API key and network access. No offline/simulated paths are used in production.
 
 ### Run
 
@@ -69,25 +69,37 @@ python -m poly
 Default config location: `~/.poly/config.yml`
 
 ```yaml
-# Phase 1 Settings
+# App Configuration (~/.poly/config.yml)
 paper_trading:
-  default_stake: 100  # Fixed stake per trade
+  default_stake: 100
 
 research:
-  min_confidence_threshold: 70  # 0-100
-  min_edge_threshold: 0.10      # 10%
-  
+  # Thresholds
+  min_confidence_threshold: 70     # 0-100
+  min_edge_threshold: 0.10         # 10%
+  # Depth & model
+  model_name: grok-4-fast
+  default_rounds: 20               # deep research (20–40 minutes)
+  # Tools
+  enable_code_execution: true      # use for quantitative checks
+  enable_image_understanding: true
+  enable_video_understanding: true
+  # Cost estimation (USD per 1K tokens)
+  prompt_token_price_per_1k: 0.0
+  completion_token_price_per_1k: 0.0
+  reasoning_token_price_per_1k: 0.0
+
 polls:
-  top_n: 20                     # Show top 20 liquid polls
-  exclude_categories:           # Exclude sports
+  top_n: 20
+  exclude_categories:
     - sports
     - esports
-  liquidity_weight:             # Sort by liquidity
+  liquidity_weight:
     open_interest: 0.7
     volume_24h: 0.3
 
 database:
-  path: ~/.poly/trades.db       # SQLite database
+  path: ~/.poly/trades.db
 ```
 
 ## Tech Stack
