@@ -1,5 +1,7 @@
 # Grok Agentic Server-Side Tool Calling Guide
 
+> **Note**: This guide is for reference only. If you need clarity or more information, use the Context7 MCP tool to fetch the latest documentation.
+
 ## Overview
 
 Grok 4 provides powerful agentic capabilities through server-side tool calling, allowing the model to autonomously use Web Search, X (Twitter) Search, and Code Execution to gather information and solve complex problems.

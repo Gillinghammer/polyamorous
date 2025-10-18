@@ -1,5 +1,7 @@
 # Polymarket Python CLOB Client Guide
 
+> **Note**: This guide is for reference only. If you need clarity or more information, use the Context7 MCP tool to fetch the latest documentation.
+
 ## Overview
 
 The Polymarket Py CLOB Client allows you to interact with Polymarket's Central Limit Order Book (CLOB) to fetch market data, place orders, and manage trading activities. For Phase 1, we'll focus on **read-only operations** to fetch market data.
