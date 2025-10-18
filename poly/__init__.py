@@ -1,5 +1,4 @@
 """Poly TUI application package."""
 
-from .app import PolyApp
-
-__all__ = ["PolyApp"]
+# Avoid importing Textual app at package import time to keep library imports light.
+__all__: list[str] = []

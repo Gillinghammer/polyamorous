@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+import inspect
 from datetime import datetime, timezone
 from importlib import import_module, util
 from typing import Callable, Iterable, Optional
@@ -22,22 +23,24 @@ class ResearchService:
     config: ResearchConfig
 
     def __post_init__(self) -> None:
-        self._client = self._build_client()
+        self._client, self._is_async = self._build_client()
 
     async def conduct_research(
         self,
         market: Market,
         callback: ProgressCallback,
-        rounds: int = 4,
+        rounds: int = 6,
     ) -> ResearchResult:
-        """Run research asynchronously, streaming progress via callback."""
+        """Run research asynchronously with Grok streaming and produce structured output."""
 
         start = datetime.now(tz=timezone.utc)
 
         if self._client is None:
-            result = await self._simulate_research(market, callback, rounds)
-        else:
-            result = await self._run_with_grok(market, callback, rounds)
+            raise RuntimeError(
+                "Grok client unavailable. Set XAI_API_KEY and install xai-sdk to enable research."
+            )
+
+        result = await self._run_with_grok(market, callback, rounds)
 
         duration = datetime.now(tz=timezone.utc) - start
         return ResearchResult(
@@ -64,46 +67,12 @@ class ResearchService:
             return None
 
         module = import_module("xai_sdk")
-        client_cls = getattr(module, "Client")
-        return client_cls(api_key=api_key)
+        async_cls = getattr(module, "AsyncClient", None)
+        if async_cls is None:
+            raise RuntimeError("xai-sdk AsyncClient is required; install a recent xai-sdk.")
+        return async_cls(api_key=api_key), True
 
-    async def _simulate_research(
-        self,
-        market: Market,
-        callback: ProgressCallback,
-        rounds: int,
-    ) -> dict:
-        """Offline fallback that mimics multi-round analysis."""
-
-        findings: list[str] = []
-        for round_number in range(1, rounds + 1):
-            message = _SIMULATED_ROUNDS[round_number - 1].format(question=market.question)
-            callback(ResearchProgress(message=message, round_number=round_number, total_rounds=rounds))
-            await asyncio.sleep(0.5)
-            findings.append(message)
-
-        callback(
-            ResearchProgress(
-                message="Synthesis complete. Preparing recommendation...",
-                round_number=rounds,
-                total_rounds=rounds,
-                completed=True,
-            )
-        )
-
-        price_edge = _estimate_edge(market)
-        confidence = max(self.config.min_confidence_threshold, 72.0)
-
-        return {
-            "prediction": "Yes" if price_edge >= 0 else "No",
-            "probability": min(0.9, max(0.1, 0.5 + price_edge)),
-            "confidence": confidence,
-            "rationale": (
-                "Based on synthesized public filings, expert commentary, and recent market movements, the odds support this position."
-            ),
-            "key_findings": findings,
-            "citations": ["https://example.com/analysis", "https://example.com/news"],
-        }
+    # Simulation removed by design; research requires Grok (xai-sdk + XAI_API_KEY)
 
     async def _run_with_grok(
         self,
@@ -133,14 +102,15 @@ class ResearchService:
         findings: list[str] = []
         citations: list[str] = []
 
-        async for response, chunk in chat.stream_async():
-            if chunk.tool_calls:
+        # Streaming via AsyncClient
+        async for response, chunk in chat.stream():
+            if getattr(chunk, "tool_calls", None):
                 current_round = min(total_rounds, current_round + 1)
                 message = f"Round {current_round}/{total_rounds}: {chunk.tool_calls[0].function.name}"
                 callback(ResearchProgress(message=message, round_number=current_round, total_rounds=total_rounds))
                 findings.append(message)
 
-            if chunk.content:
+            if getattr(chunk, "content", None):
                 findings.append(chunk.content)
 
             if response and getattr(response, "citations", None):
@@ -155,65 +125,78 @@ class ResearchService:
             )
         )
 
-        response = chat.sample()
+        # Retrieve final response
+        response = await chat.sample()
         content = getattr(response, "content", "")
 
+        parsed = _extract_json(content)
+        if not parsed:
+            parsed = {
+                "prediction": "Yes" if "yes" in content.lower() else "No",
+                "probability": 0.5,
+                "confidence": float(self.config.min_confidence_threshold),
+                "rationale": content[:2000],
+                "key_findings": findings[-10:],
+            }
+
         return {
-            "prediction": "Yes" if "Yes" in content else "No",
-            "probability": getattr(response, "probability", 0.5),
-            "confidence": getattr(response, "confidence", self.config.min_confidence_threshold),
-            "rationale": content,
-            "key_findings": findings,
+            "prediction": str(parsed.get("prediction", "Yes")),
+            "probability": float(parsed.get("probability", 0.5)),
+            "confidence": float(parsed.get("confidence", self.config.min_confidence_threshold)),
+            "rationale": str(parsed.get("rationale", ""))[:5000],
+            "key_findings": list(parsed.get("key_findings", findings))[-20:],
             "citations": citations,
         }
 
 
-_SIMULATED_ROUNDS: tuple[str, ...] = (
-    "Reviewing background context for '{question}'",
-    "Scanning the open web for asymmetric information",
-    "Analyzing sentiment shifts from X posts",
-    "Cross-referencing data and preparing synthesis",
-)
-
-
 def _build_prompt(market: Market) -> str:
-    """Return the structured Grok prompt from the PRD."""
+    """Return a professional agentic research prompt optimized for Grok tools."""
 
     odds = ", ".join(f"{name}: {price:.0%}" for name, price in market.formatted_odds().items())
+    options = ", ".join(market.formatted_odds().keys()) or "Yes, No"
     return (
-        "You are a prediction market analyst researching this poll:\n\n"
-        f"Question: {market.question}\n"
-        f"Options: {', '.join(market.formatted_odds().keys())}\n"
-        f"Current market odds: {odds}\n"
-        f"Resolves: {market.end_date.isoformat()}\n\n"
-        "Your goal is to find information asymmetries that could give us edge over the market.\n\n"
-        "Phase 1: Identify Information Gaps\n"
-        "- What key factors determine this outcome?\n"
-        "- What information is the market potentially missing?\n"
-        "- What sources would have the best insights?\n\n"
-        "Phase 2: Deep Research (use Web Search and X Search)\n"
-        "- Search for recent news, analysis, data\n"
-        "- Look for expert opinions, insider knowledge\n"
-        "- Cross-reference multiple sources\n"
-        "- Identify sentiment vs. facts\n\n"
-        "Phase 3: Synthesize\n"
-        "- Which option is most likely? (probability 0-1)\n"
-        "- How confident are you? (0-100%)\n"
-        "- What are the key reasons? (bullet points)\n"
-        "- What information asymmetries did you find?\n"
-        "- List all sources used\n\n"
-        "Continue researching until you have high confidence OR hit diminishing returns."
+        "You are a professional prediction market analyst. Your task is to research a Polymarket poll and surface asymmetric information that the market may be missing.\n\n"
+        f"Poll Question: {market.question}\n"
+        f"Options: {options}\n"
+        f"Current Market Odds: {odds}\n"
+        f"Resolves At: {market.end_date.isoformat()}\n\n"
+        "Use server-side tools aggressively: web_search() for news/analysis/data and x_search() for real-time sentiment and insider knowledge.\n"
+        "Prioritize: primary sources, expert analysis, recent developments, credible leaks/insider signals.\n"
+        "Evaluate sentiment vs facts, detect narrative shifts, and identify crowd wisdom patterns on X (accounts, communities, engagement).\n"
+        "Look for catalysts, timelines, dependencies, and leading indicators.\n\n"
+        "Working style:\n"
+        "- Iterate in multiple rounds.\n"
+        "- Cross-check claims.\n"
+        "- Note unknowns and failure modes.\n"
+        "- Stop only when information is saturated or diminishing returns.\n\n"
+        "At the end, output ONLY a compact JSON object with keys: \n"
+        "{\"prediction\": string (the option most likely), \n"
+        " \"probability\": number (0-1), \n"
+        " \"confidence\": number (0-100), \n"
+        " \"rationale\": string (concise synthesis), \n"
+        " \"key_findings\": string[] (5-10 bullets).}\n"
+        "Do not include any extra text outside the JSON."
     )
 
 
-def _estimate_edge(market: Market) -> float:
-    """Return a naive edge estimate using average outcome price."""
+def _extract_json(text: str) -> dict | None:
+    """Extract and parse a JSON object from arbitrary model output."""
 
-    outcomes = market.formatted_odds()
-    if not outcomes:
-        return 0.0
+    import json
+    import re
 
-    yes_price = outcomes.get("Yes")
-    if yes_price is None:
-        yes_price = sum(outcomes.values()) / len(outcomes)
-    return yes_price - 0.5
+    if not text:
+        return None
+    # Remove code fences if present
+    cleaned = re.sub(r"```(json)?", "", text).strip()
+    # Find the last JSON-like object in the string
+    match = re.search(r"\{[\s\S]*\}$", cleaned)
+    if not match:
+        # Try a more liberal search for any JSON object
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except Exception:
+        return None

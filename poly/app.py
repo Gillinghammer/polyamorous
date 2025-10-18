@@ -242,10 +242,17 @@ class PolyApp(App):
             # Worker runs in the event loop; update directly
             self._handle_progress_update(progress)
 
-        result = await self._research_service.conduct_research(market, callback)
-        evaluation = self._evaluator.evaluate(market, result)
-        # Worker runs in the event loop; update directly
-        self._handle_research_complete(result, evaluation)
+        try:
+            result = await self._research_service.conduct_research(market, callback)
+            evaluation = self._evaluator.evaluate(market, result)
+            # Worker runs in the event loop; update directly
+            self._handle_research_complete(result, evaluation)
+        except Exception as error:
+            log = self.query_one("#research-log", RichLog)
+            log.write(f"Error: {error}")
+            spinner = self.query_one("#research-spinner", LoadingIndicator)
+            spinner.display = False
+            self.notify("Research failed", title="Grok Error")
 
     def _handle_progress_update(self, progress: ResearchProgress) -> None:
         log = self.query_one("#research-log", RichLog)

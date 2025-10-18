@@ -15,6 +15,11 @@ These instructions apply to the entire repository.
 - Provide graceful fallbacks for missing optional dependencies or offline execution while keeping production pathways available.
 - Favor dependency injection for services that need configuration (API keys, database paths).
 
+### No-Fallback Rule (Project-wide)
+- Fail fast when required dependencies or endpoints are unavailable.
+- Do not include simulation, offline, or multi-endpoint fallbacks in production paths.
+- Surface clear errors to the UI/logs and instruct the user to provide credentials/install deps.
+
 ## Testing & Tooling
 - Ensure `python -m compileall poly` succeeds after changes.
 - When adding async flows, provide unit-testable coroutine helpers separate from Textual widgets.

@@ -44,29 +44,11 @@ class PolymarketService:
 
         markets: List[Market]
         if self._client is None:
-            markets = list(_offline_markets())
-        else:
-            # Prefer sampling markets which include a large set of current markets
-            try:
-                raw = self._client.get_sampling_markets()
-            except Exception:
-                raw = self._client.get_markets()
-
-            # py-clob-client returns a dict with keys: data, next_cursor, limit, count
-            if isinstance(raw, dict):
-                raw_markets: Iterable[dict] = raw.get("data", []) or []
-            else:
-                raw_markets = raw  # backward compatibility if it ever returns a list
-            markets = self._transform_markets(raw_markets)
-
-            # If nothing survived filtering, fall back to a looser transform on get_markets
-            if not markets:
-                try:
-                    raw2 = self._client.get_markets()
-                    raw_markets2 = raw2.get("data", []) if isinstance(raw2, dict) else raw2
-                    markets = self._transform_markets(raw_markets2)
-                except Exception:
-                    pass
+            raise RuntimeError("py-clob-client not installed; live markets required per no-fallback rule.")
+        # Single canonical endpoint for live markets
+        raw = self._client.get_sampling_markets()
+        raw_markets: Iterable[dict] = raw.get("data", []) if isinstance(raw, dict) else raw
+        markets = self._transform_markets(raw_markets)
 
         return markets[: self.poll_config.top_n]
 
