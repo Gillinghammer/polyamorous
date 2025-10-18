@@ -1,205 +1,449 @@
-# PRD: CLI Market Analyst for Polymarket (Grok Agentic)
+# PRD: Poly - TUI Polymarket Research & Paper Trading
 
 ## 1) Summary
 
-A Python command‑line tool that scans active Polymarket markets, runs autonomous Grok research (Web + X search + code execution) to estimate outcome probabilities, compares them to market odds, evaluates edge vs. a configurable risk‑free rate over time‑to‑expiry, and recommends trades. Users review transparent research with citations, accept or reject each proposed trade, and monitor P&L and positions in a clean, futuristic TUI. No web frontend. Users bring their own xAI (Grok) API key.
+A Python TUI (Terminal User Interface) application that helps users research Polymarket polls and make informed predictions. The app displays top liquid polls (excluding sports), runs deep agentic research using Grok 4 (Web + X search) to find asymmetric information, evaluates if the odds justify taking a position, and tracks paper trading performance. Users bring their own xAI (Grok) API key.
 
 ## 2) Goals & Non‑Goals
 
-**Goals**
+**Phase 1 Goals**
 
-* Identify high‑quality Polymarket opportunities with enough liquidity.
-* Provide explainable, cited research that leads to a model‑driven probability estimate per market.
-* Compute expected value (EV) and annualized return vs. risk‑free alternative.
-* Let users accept/reject each recommendation and track positions, P&L, and history in a minimalist TUI.
-* Near real‑time position and price updates when feasible.
+* Display top 20 most liquid Polymarket polls (excluding sports) in a clean TUI
+* Enable deep, multi-round agentic research to find asymmetric information
+* Show research progress (research can take 20-40 minutes)
+* Evaluate if current odds justify taking a position (accuracy over frequency)
+* Track paper trades with win rate, profit metrics, and projected APR
+* Hold positions until poll expiry (no early exits in Phase 1)
 
-**Non‑Goals (MVP)**
+**Non‑Goals (Phase 1)**
 
-* Automated trade execution/custody. MVP recommends and logs “paper” orders. (Optional execution plugin is an extension.)
-* Advanced portfolio optimization beyond simple risk budgets and confidence‑weighted sizing.
-* Multi‑exchange support. MVP is Polymarket only.
+* Real money execution/custody - paper trading only
+* Early position exits - hold until expiry
+* Sports betting markets - exclude all sports polls
+* Complex portfolio optimization
+* Multi‑exchange support
 
 ## 3) Users & Use Cases
 
-**Primary user**: Individual or small fund operator who bets on prediction markets and wants a research copilot.
+**Primary user**: Individual prediction market trader seeking asymmetric information advantages
 
 **Top use cases**
 
-1. **Scan & shortlist** markets that meet liquidity and time‑left constraints.
-2. **Deep‑research** a selected market via Grok Agentic tool calling until confident.
-3. **Compare** model probability vs. implied odds and risk‑free APR.
-4. **Decide**: accept or reject a proposed stake and side.
-5. **Monitor**: see live positions, unrealized/realized P&L, and history.
+1. **Browse** top 20 liquid non-sports polls with current odds and time remaining
+2. **Research** selected poll using deep multi-round Grok agentic search (20-40 min)
+3. **Evaluate** if research findings justify taking a position at current odds
+4. **Trade** paper positions held until poll expiry
+5. **Monitor** dashboard with win rate, profit metrics, and projected APR
 
-## 4) High‑Level Flow
+## 4) Application Flow
 
-1. **Scan**: Pull active Polymarket markets, filter by liquidity thresholds.
-2. **Research**: For each candidate, call Grok with a meta‑prompt to run Web Search and/or X Search. Iterate until confidence threshold or max rounds.
-3. **Price & Edge**: Fetch current market odds. Compute EV, ROI to expiry, and annualized APR. Compare to risk‑free APR.
-4. **Recommend**: Produce a trade suggestion (side, stake, rationale, citations, confidence) and display in TUI.
-5. **Decision**: User accepts or rejects. On accept, record a “paper” trade and track position.
-6. **Monitor**: Stream quotes to update positions and P&L. Persist history.
+**Launch**: User types `poly` to start the TUI application
 
-## 5) CLI/TUI Experience (Rich/Textual style)
+1. **Load Markets**: Fetch and display top 20 most liquid Polymarket polls (excluding sports)
+   - Show: poll question, options, current odds, time remaining, liquidity
+   
+2. **Select Poll**: User selects a poll to research
 
-* **Global top bar**: clock, network, positions count, total bankroll, unrealized/realized P&L.
-* **Left pane**: market list (title, time left, price YES/NO, 24h vol, OI/liquidity badge).
-* **Right pane**: selected market details, agentic research summary, citations list (openable via hotkey), confidence, EV, APR vs. risk‑free, suggested side/stake.
-* **Action footer**: `[A] Accept  [R] Reject  [D] Details  [C] Citations  [H] History  [S] Settings`.
-* **History view**: chronological trades with outcome, stake, entry price, exit (expiry) result, P&L.
-* Visual style: dark, monospace, neon accents, spacious padding, clear typographic hierarchy, no ASCII noise.
+3. **Deep Research** (20-40 minutes):
+   - Run multiple rounds of Grok 4 agentic research (Web + X search)
+   - Goal: Find asymmetric information to accurately forecast outcome
+   - Show progress indicators during long-running research
+   - Iterate until confident understanding of all information intricacies
+   
+4. **Evaluate Position**:
+   - Research produces: prediction, confidence level, rationale, citations
+   - Algorithm evaluates: Do current odds justify taking a position?
+   - Recommendation: Enter position or pass (prioritize accuracy over frequency)
+   
+5. **Enter Trade** (if user accepts):
+   - Record paper trade (poll, side, odds, stake, timestamp)
+   - Position held until poll expiry (no early exits)
+   
+6. **Dashboard**: Display performance metrics
+   - Active positions count
+   - Win rate
+   - Total profit
+   - Average profit
+   - Projected annualized rate of return
 
-## 6) Commands (Typer)
+## 5) TUI Experience (Textual Framework)
 
-* `pm scan` — scan and rank candidate markets.
-* `pm review <market_id>` — open research view, compute EV/APR, propose trade.
-* `pm accept <market_id> [--stake 250] [--side yes|no]` — accept proposal or override.
-* `pm positions` — live positions dashboard.
-* `pm history` — trade ledger with export (`--csv`).
-* `pm settings` — configure liquidity floors, risk‑free source, bankroll, sizing policy, update intervals.
+**Launch**: `poly` command starts the TUI application
+
+**Visual Style**:
+- Clean, modern interface using Textual components
+- Dark theme with clear typography
+- Minimal clutter, focus on information density
+- Responsive layout optimized for terminal
+
+**Main Views**:
+
+1. **Polls List View** (Default):
+   - Top 20 most liquid non-sports polls
+   - Condensed format: Question | Options | Current Odds | Time Left | Liquidity
+   - Navigate with arrow keys, Enter to select
+
+2. **Research View** (During research):
+   - Poll details at top
+   - Progress indicator showing research status (critical for 20-40 min process)
+   - Real-time updates: "Searching web...", "Analyzing X posts...", "Round 2/4..."
+   - Live research notes as they develop
+
+3. **Decision View** (After research):
+   - Research summary with prediction & confidence
+   - Key findings and citations
+   - Current odds vs. recommended position
+   - Action: [Enter Trade] [Pass] [View Details]
+
+4. **Dashboard View**:
+   - Active Positions: count
+   - Win Rate: X/Y (Z%)
+   - Total Profit: $X
+   - Average Profit: $X per position
+   - Projected APR: X%
+   - Recent trades list
+
+**Navigation**:
+- Tab/Shift+Tab: Switch between views
+- Arrow keys: Navigate lists
+- Enter: Select/Confirm
+- Esc: Go back
+- q: Quit application
+
+## 6) Command
+
+**Single Command**: `poly`
+- Launches the full TUI application
+- No subcommands needed for Phase 1
+- All functionality accessible within TUI
 
 ## 7) Functional Requirements
 
-### 7.1 Market ingestion & filters
+### 7.1 Poll Ingestion & Filtering
 
-* Ingest active Polymarket markets with fields: `id, slug, question, resolves_at, prices {yes,no}, volume_24h, open_interest, orderbook_depth, category`.
-* **Liquidity filter** (configurable): must satisfy all of:
+* Fetch active Polymarket polls with fields: `id, question, options[], current_odds{}, resolves_at, open_interest, volume_24h, category`
+* **Exclude**: All sports-related polls (filter by category)
+* **Select**: Top 20 by liquidity (open_interest + volume_24h combined metric)
+* **Display**: Condensed list showing:
+  - Poll question (truncated if long)
+  - Options with current odds
+  - Time remaining until resolution
+  - Liquidity indicator (High/Med/Low badge)
 
-  * `open_interest >= MIN_OI`
-  * `volume_24h >= MIN_VOL_24H`
-  * `top_of_book_depth >= MIN_DEPTH` (sum on both sides within ±1% spread)
-* **Time filter**: `min_hours_to_expiry <= time_left <= max_days_to_expiry`.
-* Sort candidates by a score: `liquidity_score + time_weight + volatility_hint` (weights configurable).
+### 7.2 Deep Agentic Research (Grok 4)
 
-### 7.2 Agentic research (Grok)
+**Goal**: Find asymmetric information to accurately forecast poll outcome
 
-* Use `grok-4-fast` with server‑side tools: Web Search, X Search, Code Execution.
-* **Meta‑prompt** (sketch):
+**Tools**: Grok 4 with Web Search and X Search capabilities
 
-  * Provide market title, description, constraints, and resolution criteria.
-  * Ask Grok to:
+**Process**:
+1. Initial research round analyzes poll question and identifies key information gaps
+2. Multiple iterative rounds (no hard limit) to gather information:
+   - Web search for news, analysis, data
+   - X search for real-time sentiment, insider knowledge
+   - Each round builds on previous findings
+3. Continue until confident in understanding all intricacies OR diminishing returns
+4. Expected duration: 20-40 minutes per poll
 
-    1. Outline key uncertainties and information needs.
-    2. Run Web and/or X search in iterative rounds until confidence converges or max rounds.
-    3. Produce a probability estimate `p` for YES (0–1), a confidence score `c` (0–1), and a concise, sourced rationale with citations.
-    4. Return a JSON block with `{p, c, rationale, citations[]}` plus any time‑sensitive caveats.
-* Enforce max rounds and time budget per market.
-* Store research artifacts for audit.
+**Output**:
+- Prediction: Which option is most likely (with probability)
+- Confidence: 0-100% confidence in the prediction
+- Rationale: Key findings explaining the prediction
+- Citations: Sources used (web links, X posts)
+- Information asymmetries: What the market might be missing
 
-### 7.3 Edge, EV, and APR vs. risk‑free
+**UX Requirements**:
+- MUST show live progress during research (critical for long duration)
+- Display current research round/activity
+- Show interim findings as they develop
+- Allow user to monitor without blocking TUI
 
-* **Implied probability** from price: `p_implied_yes = price_yes` (Polymarket $1 payout convention).
-* **Edge**: `edge = p_model - p_implied_yes` (for YES; for NO use `edge_no = (1 - p_model) - price_no`).
-* **ROI to expiry (YES)**: `roi = (p_model*1 + (1-p_model)*0 - price_yes) / price_yes = (p_model - price_yes)/price_yes`.
-* **Annualized APR**: `apr = roi * (365 / days_to_expiry)`.
-* Compare `apr` against configured **risk‑free APR** (source: configurable provider or manual input). Flag green if `apr >= rf_apr + min_spread`.
+### 7.3 Position Evaluation Algorithm
 
-### 7.4 Sizing & decisioning
+**Philosophy**: Accuracy over frequency. Only enter when edge is clear.
 
-* **Confidence‑aware sizing** (two policies):
+**Inputs**:
+- Research prediction: probability for each option
+- Research confidence: 0-100%
+- Current market odds for each option
+- Time to expiry
 
-  * **Flat**: `stake = bankroll * risk_budget * c`.
-  * **Scaled Kelly (optional)**: compute Kelly fraction for binary payoff, then multiply by `c` and cap by `max_fraction`.
-* **Recommendation**: choose side with higher `apr` and positive EV subject to min confidence `c_min` and min edge `edge_min`.
-* **User gate**: user must accept or reject. On accept, create a **paper trade** record with `market_id, side, stake, entry_price, timestamp, research_id`.
+**Algorithm**:
+1. Calculate expected value for each option:
+   ```
+   EV = (predicted_prob * payout) - (1 - predicted_prob) * stake
+   ```
+2. Calculate edge vs. market:
+   ```
+   edge = predicted_prob - implied_prob_from_odds
+   ```
+3. Adjust for confidence:
+   ```
+   adjusted_edge = edge * (confidence / 100)
+   ```
+4. Decision criteria (all must be true):
+   - `adjusted_edge > minimum_threshold` (e.g., 10%)
+   - `confidence > minimum_confidence` (e.g., 70%)
+   - `EV > 0` (positive expected value)
 
-### 7.5 Positions, pricing, and P&L
+**Recommendation**:
+- ENTER: Option to bet on + suggested stake
+- PASS: Why the position isn't justified (weak edge, low confidence, etc.)
 
-* Fetch near real‑time quotes (polling or websocket if available). Update position `mark_price` and `unrealized_pnl`.
-* On resolution, compute `realized_pnl` and archive.
-* **Dashboard** always shows: total bankroll, cash, risk in play, unrealized P&L, realized P&L, positions table.
+### 7.4 Paper Trading
 
-### 7.6 Transparency & citations
+**Phase 1 Constraints**:
+- Paper trading only (no real money)
+- Fixed stake amount per trade (e.g., $100)
+- Hold until poll expiry (no early exits)
+- Track all positions to conclusion
 
-* For every recommendation, display:
+**Trade Record**:
+```
+{
+  poll_id, 
+  question,
+  selected_option,
+  entry_odds,
+  stake_amount,
+  entry_timestamp,
+  predicted_probability,
+  confidence,
+  research_summary,
+  status: "active" | "won" | "lost",
+  resolves_at,
+  actual_outcome: null | option_name,
+  profit_loss: null | number
+}
+```
 
-  * Short rationale paragraph.
-  * Top citations (open via `o` to launch in default browser).
-  * Research JSON (collapsible) for audit.
+**User Decision Flow**:
+1. Review research findings and recommendation
+2. See: "Recommendation: BET on [Option X] at current odds of [Y]"
+3. Action: [Enter Trade with $100] or [Pass]
+4. If Enter: Record paper trade, add to active positions
+5. Position held until poll resolves
 
-### 7.7 Persistence & exports
+### 7.5 Dashboard & Performance Metrics
 
-* Use SQLite (SQLModel) for `markets, research, proposals, trades, positions, fills, prices`.
-* `pm history --csv` exports trades with research linkage.
+**Key Metrics**:
+1. **Active Positions**: Count of current open trades
+2. **Win Rate**: Resolved wins / total resolved trades (e.g., "12/15 (80%)")
+3. **Total Profit**: Sum of all P&L from resolved trades
+4. **Average Profit**: Total profit / number of resolved trades
+5. **Projected APR**: Annualized return based on average profit and holding period
+
+**Calculations**:
+- Win when actual outcome matches our position
+- Loss when actual outcome differs
+- Profit = (stake * odds) - stake [if win], or -stake [if loss]
+- APR = (total_profit / total_staked) * (365 / avg_days_held) * 100
+
+**Display**:
+- Show metrics prominently in dashboard view
+- List active positions with: poll question, our bet, odds, days left
+- List recent resolved trades with: outcome, profit/loss, duration
 
 ## 8) Non‑Functional Requirements
 
-* **Performance**: scan + initial research on 5–10 markets within a target runtime budget.
-* **Resilience**: handle transient API errors with retries and backoff.
-* **Security**: API keys loaded from env or local config file, never logged. No user auth system.
-* **Observability**: structured logs with levels; optional debugging view that streams Grok tool‑call notifications.
-* **Compliance**: clear “not investment advice” notice; user is responsible for execution and risk.
+* **Performance**: 
+  - Polls list loads in < 3 seconds
+  - Research runs 20-40 minutes (acceptable, must show progress)
+  - TUI remains responsive during long operations
+  
+* **Resilience**: 
+  - Handle API errors gracefully with retries
+  - Save research progress (don't lose 40min of work on crash)
+  - Persist trades to disk (SQLite)
+  
+* **UX**:
+  - Live progress indicators for long operations
+  - Clear, readable output (no terminal clutter)
+  - Smooth navigation between views
+  
+* **Security**: 
+  - Load xAI API key from environment variable
+  - Never log API keys
+  - Store data locally only
+  
+* **Data Persistence**:
+  - SQLite database for trades, research, positions
+  - Survive app restarts
+  - Export capability (future: CSV/JSON)
 
 ## 9) Tech Stack
 
-* Python 3.11+
-* Libraries: `typer` (CLI), `textual` or `rich` (TUI), `httpx` (async API), `pydantic`, `sqlmodel` (SQLite), `tenacity` (retries).
-* xAI: `xai_sdk>=1.3.1`, model `grok-4-fast`, tools `web_search`, `x_search`, `code_execution`.
-* Optional: `websockets` if Polymarket provides a stream.
+**Core**:
+- Python 3.11+
+- Textual 0.40+ (TUI framework from textualize.io)
+- httpx (async HTTP for Polymarket API)
+- pydantic (data validation)
+- SQLModel + SQLite (persistence)
 
-## 10) Integrations
+**AI/Research**:
+- xAI SDK for Grok 4
+- Model: `grok-4-fast` (or latest)
+- Tools: Web Search, X Search
 
-* **Polymarket data**: public market list, prices, OI, 24h volume, orderbook depth. (Exact endpoints encapsulated in an adapter.)
-* **Risk‑free source**: configurable (e.g., 4‑week bill). Fallback manual APR in settings.
-* **Open URL**: platform‑agnostic open command for citations.
+**Utilities**:
+- tenacity (retries)
+- asyncio (async operations)
+- python-dotenv (environment vars)
 
-## 11) Data Model (sketch)
+## 10) Data Sources
 
-* `Market(id, slug, title, resolves_at, price_yes, price_no, oi, vol24h, depth, category)`
-* `Research(id, market_id, p, c, rationale, citations[], rounds, created_at)`
-* `Proposal(id, market_id, side, stake, edge, apr, rf_apr, accepted, created_at)`
-* `Trade(id, market_id, side, stake, entry_price, timestamp, research_id)`
-* `Position(id, market_id, side, stake, entry_price, mark_price, unrealized_pnl, status)`
-* `Fill(id, trade_id, price, qty, timestamp)` (reserved for future execution plugin)
-* `PriceTick(market_id, price_yes, price_no, ts)`
+* **Polymarket API**: 
+  - Fetch active polls with metadata
+  - Filter by category (exclude sports)
+  - Sort by liquidity metrics
+  - Get current odds in real-time
+  
+* **xAI Grok API**:
+  - Agentic research with tool calling
+  - Web search for news/analysis
+  - X search for real-time sentiment
 
-## 12) Example Meta‑Prompt (condensed)
+## 11) Data Model
 
-> You are an analyst estimating the probability of the **YES** outcome for a Polymarket market. Use Web Search and X Search tools in iterative rounds. Identify key uncertainties, gather recent, credible sources, and avoid stale info. Return JSON with fields: `p` (0–1), `c` (0–1), `rationale` (<= 8 sentences), `citations` (list of URLs). If confidence is low, explain blockers and stop early.
-
-System appends: market title, resolution criteria, time to expiry, recent price history snapshot.
-
-## 13) Sample Screens (ASCII)
-
+**Poll**:
+```python
+{
+  id: str,
+  question: str,
+  options: list[str],
+  current_odds: dict[str, float],  # option -> odds
+  resolves_at: datetime,
+  open_interest: float,
+  volume_24h: float,
+  category: str,
+  status: "active" | "resolved"
+}
 ```
-┌────────────────────────────────── CLI Analyst ──────────────────────────────────┐
-│  21:04  •  Bankroll: $50,000  •  In‑Play: $3,750  •  UPNL: +$420  •  RPNL: $0  │
-├──────────────────── Markets (filtered) ───────────────────┬─────────────────────┤
-│ [A] Election X leads?        T‑3d  YES 0.62  OI $1.2M   │ EV: +0.06  APR: 58% │
-│ [B] CPI > 3.2% Nov?          T‑11d YES 0.44  OI $0.6M   │ Conf: 0.72          │
-│ [C] Company Y acquires Z?    T‑27d YES 0.31  OI $0.3M   │ Risk‑free: 4.8% APR │
-├────────────────── Selected: [A] Election X leads? ──────────────────────────────┤
-│ p=0.68  c=0.70  price_yes=0.62  edge=+0.06  roi=+9.7%  apr=+118%              │
-│ Rationale: Recent polls from ...; turnout models ...; swing state updates ...  │
-│ Citations: [1] https://...  [2] https://x.com/...  [3] https://...             │
-├──────────────────────────────── Actions ────────────────────────────────────────┤
-│ [A] Accept (stake $350)   [R] Reject   [D] Details   [C] Open citations         │
-└────────────────────────────────────────────────────────────────────────────────┘
+
+**Research**:
+```python
+{
+  id: int,
+  poll_id: str,
+  prediction: str,  # which option
+  probability: float,  # 0-1
+  confidence: float,  # 0-100
+  rationale: str,
+  key_findings: list[str],
+  citations: list[str],
+  rounds_completed: int,
+  created_at: datetime,
+  duration_minutes: int
+}
 ```
+
+**Trade**:
+```python
+{
+  id: int,
+  poll_id: str,
+  question: str,
+  selected_option: str,
+  entry_odds: float,
+  stake_amount: float,
+  entry_timestamp: datetime,
+  predicted_probability: float,
+  confidence: float,
+  research_id: int,
+  status: "active" | "won" | "lost",
+  resolves_at: datetime,
+  actual_outcome: str | null,
+  profit_loss: float | null,
+  closed_at: datetime | null
+}
+```
+
+## 12) Research Prompt Strategy
+
+**Goal**: Find asymmetric information to forecast poll outcome accurately
+
+**Prompt Template**:
+```
+You are a prediction market analyst researching this poll:
+
+Question: {poll_question}
+Options: {options}
+Current market odds: {current_odds}
+Resolves: {resolution_date}
+
+Your goal is to find information asymmetries that could give us edge over the market.
+
+Phase 1: Identify Information Gaps
+- What key factors determine this outcome?
+- What information is the market potentially missing?
+- What sources would have the best insights?
+
+Phase 2: Deep Research (use Web Search and X Search)
+- Search for recent news, analysis, data
+- Look for expert opinions, insider knowledge
+- Cross-reference multiple sources
+- Identify sentiment vs. facts
+
+Phase 3: Synthesize
+- Which option is most likely? (probability 0-1)
+- How confident are you? (0-100%)
+- What are the key reasons? (bullet points)
+- What information asymmetries did you find?
+- List all sources used
+
+Continue researching until you have high confidence OR hit diminishing returns.
+```
+
+## 13) Phase 1 Scope Summary
+
+**IN SCOPE**:
+- ✅ TUI app launched with `poly` command
+- ✅ Display top 20 liquid non-sports polls
+- ✅ User selects poll to research
+- ✅ Deep multi-round Grok research (20-40 min)
+- ✅ Live progress indicators during research
+- ✅ Position evaluation algorithm (accuracy > frequency)
+- ✅ Paper trading with fixed stakes
+- ✅ Hold positions until expiry
+- ✅ Dashboard with win rate, profit, APR metrics
+- ✅ SQLite persistence
+
+**OUT OF SCOPE** (Future Phases):
+- ❌ Real money execution
+- ❌ Early position exits
+- ❌ Sports betting
+- ❌ Portfolio optimization
+- ❌ Multiple exchanges
+- ❌ Advanced risk management
+- ❌ User authentication
+- ❌ Mobile/web interface
 
 ## 14) Configuration
 
-`~/.pm_analyst/config.yml`
-
-```yaml
-xai_api_key_env: XAI_API_KEY
-risk_free_apr: 0.048          # fallback if provider disabled
-risk_free_provider: treasury   # treasury|manual
-liquidity:
-  min_oi: 200000
-  min_vol24h: 50000
-  min_depth: 10000
-research:
-  max_rounds: 4
-  min_confidence: 0.6
-  min_edge: 0.03
-sizing:
-  policy: flat                 # flat|kelly
-  bankroll: 50000
-  risk_budget: 0.02            # 2% per trade before confidence
-  max_fraction: 0.05           # cap for kelly
-updates:
-  quotes_interval_se
+**Environment Variables** (`.env`):
 ```
-≈
+XAI_API_KEY=your_xai_api_key_here
+```
+
+**App Configuration** (`~/.poly/config.yml`):
+```yaml
+# Phase 1 Settings
+paper_trading:
+  default_stake: 100  # Fixed stake per trade
+
+research:
+  min_confidence_threshold: 70  # 0-100
+  min_edge_threshold: 0.10      # 10%
+  
+polls:
+  top_n: 20                     # Show top 20 liquid polls
+  exclude_categories:           # Exclude sports
+    - sports
+    - esports
+  liquidity_weight:             # Sort by liquidity
+    open_interest: 0.7
+    volume_24h: 0.3
+
+database:
+  path: ~/.poly/trades.db       # SQLite database
+```
