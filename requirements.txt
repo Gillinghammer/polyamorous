@@ -1,0 +1,19 @@
+# Core TUI framework
+textual>=0.40.0
+
+# Polymarket API client
+py-clob-client>=0.20.0
+
+# xAI Grok SDK (optional - graceful fallback if missing)
+xai-sdk>=0.1.0
+
+# Data validation and models
+pydantic>=2.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Utilities
+tenacity>=8.2.0
+python-dotenv>=1.0.0
+

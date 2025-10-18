@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
@@ -22,7 +22,6 @@ from textual.widgets import (
     TabbedContent,
     TabPane,
 )
-from textual.worker import work
 
 from .config import AppConfig, load_config
 from .models import Market, PortfolioMetrics, ResearchProgress, ResearchResult, Trade
@@ -40,35 +39,12 @@ class PolyApp(App):
         background: #101217;
     }
 
-    # Shared spacing
-    # ----------------
-    # Provide consistent padding and spacing for the views.
-    # ----------------
     TabbedContent {
         padding: 1 2;
     }
 
-    # Polls tab styling
-    # ------------------
-    # Encourage compact display for the market table.
-    # ------------------
-    # Provide extra height to ensure the table fits well.
-    # ------------------
-    # The hint below the table should be subtle.
-    # ------------------
-    # Buttons in the decision tab should align horizontally.
-    # ------------------
-    # Dashboard metrics should be monospaced.
-    # ------------------
-    # RichLog should have subtle border.
-    # ------------------
-    # Provide consistent border radius.
-    # ------------------
-    # Footer styling left default.
-    # ------------------
-
-    TabPane#polls TabPane-content {
-        row-gap: 1;
+    TabPane {
+        padding: 1;
     }
 
     DataTable#polls-table {
@@ -96,7 +72,11 @@ class PolyApp(App):
 
     Horizontal#decision-actions {
         padding-top: 1;
-        column-gap: 2;
+        height: auto;
+    }
+    
+    Horizontal#decision-actions > Button {
+        margin-right: 2;
     }
 
     Static#metrics-summary {
@@ -139,7 +119,7 @@ class PolyApp(App):
             with TabPane("Research", id="research"):
                 yield Static("No poll selected", id="research-title")
                 yield ProgressBar(total=4, id="research-progress")
-                yield LoadingIndicator(id="research-spinner", display=False)
+                yield LoadingIndicator(id="research-spinner")
                 yield RichLog(id="research-log")
             with TabPane("Decision", id="decision"):
                 yield Markdown("Awaiting research results...", id="decision-summary")
@@ -162,6 +142,9 @@ class PolyApp(App):
         table.cursor_type = "row"
         self.load_markets()
         self.refresh_dashboard()
+        # Hide spinner initially (Textual: set display property after mount)
+        spinner = self.query_one("#research-spinner", LoadingIndicator)
+        spinner.display = False
 
     @work(exclusive=True)
     async def load_markets(self) -> None:
@@ -195,8 +178,9 @@ class PolyApp(App):
     async def refresh_dashboard(self) -> None:
         """Update dashboard metrics in the background."""
 
+        # This worker is async and runs in the app's loop; update directly
         metrics = self._trade_repository.metrics()
-        self.call_from_thread(self._render_dashboard, metrics)
+        self._render_dashboard(metrics)
 
     def _render_dashboard(self, metrics: PortfolioMetrics) -> None:
         summary = (
@@ -255,11 +239,13 @@ class PolyApp(App):
             return
 
         def callback(progress: ResearchProgress) -> None:
-            self.call_from_thread(self._handle_progress_update, progress)
+            # Worker runs in the event loop; update directly
+            self._handle_progress_update(progress)
 
         result = await self._research_service.conduct_research(market, callback)
         evaluation = self._evaluator.evaluate(market, result)
-        self.call_from_thread(self._handle_research_complete, result, evaluation)
+        # Worker runs in the event loop; update directly
+        self._handle_research_complete(result, evaluation)
 
     def _handle_progress_update(self, progress: ResearchProgress) -> None:
         log = self.query_one("#research-log", RichLog)

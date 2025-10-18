@@ -78,3 +78,12 @@ venv.bak/
 # Virtual environments
 .env
 .venv
+
+# Python build artifacts
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Poly application data
+.poly/

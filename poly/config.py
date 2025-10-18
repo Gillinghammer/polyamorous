@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict
 
@@ -34,10 +34,10 @@ class PollConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    research: ResearchConfig = ResearchConfig()
-    paper_trading: PaperTradingConfig = PaperTradingConfig()
-    polls: PollConfig = PollConfig()
-    database_path: Path = DEFAULT_DB_PATH
+    research: ResearchConfig = field(default_factory=ResearchConfig)
+    paper_trading: PaperTradingConfig = field(default_factory=PaperTradingConfig)
+    polls: PollConfig = field(default_factory=PollConfig)
+    database_path: Path = field(default_factory=lambda: DEFAULT_DB_PATH)
 
 
 def load_config(path: Path | None = None) -> AppConfig:

@@ -15,7 +15,7 @@ from ..models import Market, MarketOutcome
 HOST = "https://clob.polymarket.com"
 
 
-@dataclass(slots=True)
+@dataclass
 class PolymarketService:
     """Service responsible for fetching and formatting markets."""
 
@@ -46,19 +46,54 @@ class PolymarketService:
         if self._client is None:
             markets = list(_offline_markets())
         else:
-            raw_markets = self._client.get_markets()
+            # Prefer sampling markets which include a large set of current markets
+            try:
+                raw = self._client.get_sampling_markets()
+            except Exception:
+                raw = self._client.get_markets()
+
+            # py-clob-client returns a dict with keys: data, next_cursor, limit, count
+            if isinstance(raw, dict):
+                raw_markets: Iterable[dict] = raw.get("data", []) or []
+            else:
+                raw_markets = raw  # backward compatibility if it ever returns a list
             markets = self._transform_markets(raw_markets)
+
+            # If nothing survived filtering, fall back to a looser transform on get_markets
+            if not markets:
+                try:
+                    raw2 = self._client.get_markets()
+                    raw_markets2 = raw2.get("data", []) if isinstance(raw2, dict) else raw2
+                    markets = self._transform_markets(raw_markets2)
+                except Exception:
+                    pass
 
         return markets[: self.poll_config.top_n]
 
     def _transform_markets(self, raw_markets: Iterable[dict]) -> List[Market]:
         """Convert raw markets to domain objects using configured filters."""
 
-        active = [
-            market
-            for market in raw_markets
-            if market.get("active", False) and not market.get("closed", False)
-        ]
+        now = datetime.now(tz=timezone.utc)
+        active: list[dict] = []
+        for market in raw_markets:
+            if not isinstance(market, dict):
+                continue
+            if market.get("archived", False):
+                continue
+            end_iso = market.get("end_date_iso") or market.get("game_start_time")
+            if not end_iso:
+                continue
+            try:
+                end_dt = datetime.fromisoformat(str(end_iso).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if end_dt <= now:
+                continue
+            # Require at least 1 outcome token with a price
+            tokens = market.get("tokens", []) or []
+            if not tokens:
+                continue
+            active.append(market)
 
         exclude_tokens = {category.lower() for category in self.poll_config.exclude_categories}
         filtered = [
@@ -81,8 +116,20 @@ class PolymarketService:
     def _liquidity_score(self, market: dict) -> float:
         """Calculate liquidity score using config weights."""
 
-        open_interest = float(market.get("liquidity", 0.0))
-        volume = float(market.get("volume", 0.0))
+        # Polymarket payloads may use various keys; normalize with sensible fallbacks
+        open_interest = float(
+            market.get("liquidity")
+            or market.get("open_interest")
+            or market.get("oi")
+            or 0.0
+        )
+        volume = float(
+            market.get("volume")
+            or market.get("volume24")
+            or market.get("volume24h")
+            or market.get("volume_24h")
+            or 0.0
+        )
         return (
             open_interest * self.poll_config.liquidity_weight_open_interest
             + volume * self.poll_config.liquidity_weight_volume_24h
@@ -91,7 +138,9 @@ class PolymarketService:
     def _convert_market(self, market: dict) -> Market:
         """Map dictionary structure into our Market dataclass."""
 
-        end_date = datetime.fromisoformat(market["end_date_iso"].replace("Z", "+00:00"))
+        # Resolution / end time
+        end_date_iso = market.get("end_date_iso") or market.get("game_start_time")
+        end_date = datetime.fromisoformat(str(end_date_iso).replace("Z", "+00:00"))
         outcomes = [
             MarketOutcome(
                 token_id=token["token_id"],
@@ -106,8 +155,15 @@ class PolymarketService:
             question=market.get("question", ""),
             description=market.get("description", ""),
             category=market.get("category", "Unknown"),
-            liquidity=float(market.get("liquidity", 0.0)),
-            volume_24h=float(market.get("volume", 0.0)),
+            liquidity=float(
+                market.get("liquidity") or market.get("open_interest") or 0.0
+            ),
+            volume_24h=float(
+                market.get("volume")
+                or market.get("volume24h")
+                or market.get("volume24")
+                or 0.0
+            ),
             end_date=end_date,
             outcomes=outcomes,
             tags=[tag for tag in market.get("tags", [])],

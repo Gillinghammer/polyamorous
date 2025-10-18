@@ -15,7 +15,7 @@ from ..models import Market, ResearchProgress, ResearchResult
 ProgressCallback = Callable[[ResearchProgress], None]
 
 
-@dataclass(slots=True)
+@dataclass
 class ResearchService:
     """Coordinates multi-round Grok research."""
 
