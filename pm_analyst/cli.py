@@ -1,10 +1,8 @@
 from __future__ import annotations
-
-import json
 import csv
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Optional
 
 import typer
 from rich.console import Console
@@ -15,10 +13,8 @@ from sqlmodel import select
 from .config import CONFIG_PATH, Settings, load_settings
 from .logging import configure_logging
 from .models.db import Market, Position, Proposal, Research, Trade
-from .services.calculations import evaluate_market, recommend_stake
-from .services.persistence import get_engine, init_db, session_scope, upsert_markets
-from .services.polymarket import PolymarketClient
-from .services.research import ResearchOrchestrator
+from .services.persistence import get_engine, init_db, session_scope
+from .services.workflows import accept_latest_proposal, load_filtered_markets, run_research_flow
 from .tui.views import display_review, display_scan
 
 app = typer.Typer(help="CLI Market Analyst for Polymarket")
@@ -37,28 +33,12 @@ def main(ctx: typer.Context, config: Optional[Path] = typer.Option(None, help="P
         "config_path": config or CONFIG_PATH,
     }
     init_db(ctx.obj["engine"])
-
-
-def _load_markets(settings: Settings):
-    client = PolymarketClient(settings)
-    return client.filtered_markets()
-
-
-def _persist_markets(engine, markets: Iterable):
-    if not markets:
-        return
-    with session_scope(engine) as session:
-        upsert_markets(session, markets)
-        session.commit()
-
-
 @app.command()
 def scan(ctx: typer.Context):
     """Scan and display candidate Polymarket markets."""
 
     settings: Settings = ctx.obj["settings"]
-    markets = _load_markets(settings)
-    _persist_markets(ctx.obj["engine"], markets)
+    markets = load_filtered_markets(settings, ctx.obj["engine"])
     if not markets:
         typer.echo("No markets met the configured filters.")
         return
@@ -71,8 +51,7 @@ def review(ctx: typer.Context, market_id: str = typer.Argument(..., help="Target
 
     settings: Settings = ctx.obj["settings"]
     engine = ctx.obj["engine"]
-    markets = _load_markets(settings)
-    _persist_markets(engine, markets)
+    markets = load_filtered_markets(settings, engine)
     if not markets:
         typer.echo("No markets met the configured filters. Run `pm scan` first.")
         raise typer.Exit(code=1)
@@ -81,72 +60,31 @@ def review(ctx: typer.Context, market_id: str = typer.Argument(..., help="Target
         typer.echo(f"Market {market_id} not found in filtered list.")
         raise typer.Exit(code=1)
 
-    orchestrator = ResearchOrchestrator(settings)
-    result = orchestrator.run_research(selected.id, selected.question)
-    edge_report = evaluate_market(result.probability_yes, selected.prices, selected.resolves_at)
-    display_review(console, markets, selected, edge_report, result.rationale, result.citations, result.confidence)
+    outcome = run_research_flow(engine, settings, selected)
+    display_review(
+        console,
+        markets,
+        selected,
+        outcome.edge_report,
+        outcome.result.rationale,
+        outcome.result.citations,
+        outcome.result.confidence,
+    )
 
-    with session_scope(engine) as session:
-        research = Research(
-            market_id=selected.id,
-            probability_yes=result.probability_yes,
-            confidence=result.confidence,
-            rationale=result.rationale,
-            citations=json.dumps(result.citations),
-            rounds=result.rounds,
-        )
-        session.add(research)
-        session.commit()
-
-        disqualifications = []
-        if result.confidence < settings.research.min_confidence:
-            disqualifications.append(
-                f"confidence {result.confidence:.0%} below minimum {settings.research.min_confidence:.0%}"
+    if outcome.disqualifications:
+        console.print(
+            Panel(
+                "\n".join(outcome.disqualifications),
+                title="No proposal generated",
+                border_style="red",
             )
-        if edge_report.edge < settings.research.min_edge:
-            disqualifications.append(
-                f"edge {edge_report.edge:+.2%} below minimum {settings.research.min_edge:.0%}"
-            )
-        if edge_report.roi <= 0:
-            disqualifications.append("negative expected ROI")
-
-        if disqualifications:
-            console.print(
-                Panel(
-                    "\n".join(disqualifications),
-                    title="No proposal generated",
-                    border_style="red",
-                )
-            )
-            typer.echo(f"Stored research #{research.id} without proposal.")
-            return
-
-        stake = recommend_stake(
-            settings.sizing.policy,
-            settings.sizing.bankroll,
-            settings.sizing.risk_budget,
-            result.confidence,
-            edge_report.roi,
-            settings.sizing.max_fraction,
         )
-        if stake <= 0:
-            console.print(Panel("Stake rounded to zero; proposal skipped.", border_style="red"))
-            typer.echo(f"Stored research #{research.id} without proposal.")
-            return
+        typer.echo(f"Stored research #{outcome.research.id} without proposal.")
+        return
 
-        proposal = Proposal(
-            market_id=selected.id,
-            side=edge_report.side,
-            stake=stake,
-            edge=edge_report.edge,
-            apr=edge_report.apr,
-            risk_free_apr=settings.risk_free_apr,
-            accepted=False,
-            research_id=research.id,
-        )
-        session.add(proposal)
-        session.commit()
-        typer.echo(f"Stored research #{research.id} and proposal #{proposal.id} for {selected.slug}.")
+    typer.echo(
+        f"Stored research #{outcome.research.id} and proposal #{outcome.proposal.id} for {selected.slug}."
+    )
 
 
 @app.command()
@@ -160,70 +98,13 @@ def accept(
 
     engine = ctx.obj["engine"]
     settings: Settings = ctx.obj["settings"]
-    with session_scope(engine) as session:
-        proposal = session.exec(
-            select(Proposal).where(Proposal.market_id == market_id).order_by(Proposal.created_at.desc())
-        ).first()
-        if not proposal:
-            typer.echo("No proposal found. Run review first.")
-            raise typer.Exit(code=1)
+    try:
+        outcome = accept_latest_proposal(engine, settings, market_id, stake, side)
+    except ValueError as exc:  # pragma: no cover - CLI guard rails
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
 
-        if side:
-            proposal.side = side.lower()
-        if stake is not None:
-            if stake <= 0:
-                typer.echo("Stake must be positive.")
-                raise typer.Exit(code=1)
-            proposal.stake = stake
-        proposal.accepted = True
-        session.add(proposal)
-
-        market: Market | None = session.get(Market, proposal.market_id)
-        entry_price = 1.0
-        if market:
-            entry_price = market.price_yes if proposal.side == "yes" else market.price_no
-        else:
-            fallback = next((m for m in _load_markets(settings) if m.id == proposal.market_id), None)
-            if fallback:
-                entry_price = fallback.prices.get(proposal.side, entry_price)
-
-        trade = Trade(
-            market_id=proposal.market_id,
-            side=proposal.side,
-            stake=proposal.stake,
-            entry_price=entry_price,
-            research_id=proposal.research_id,
-        )
-        session.add(trade)
-
-        existing_position = session.exec(
-            select(Position).where(Position.market_id == proposal.market_id, Position.status == "open")
-        ).first()
-        if existing_position:
-            total_stake = existing_position.stake + proposal.stake
-            if total_stake > 0:
-                weighted_entry = (
-                    existing_position.entry_price * existing_position.stake
-                    + entry_price * proposal.stake
-                ) / total_stake
-                existing_position.entry_price = weighted_entry
-            existing_position.stake = total_stake
-            existing_position.mark_price = entry_price
-            existing_position.side = proposal.side
-            session.add(existing_position)
-        else:
-            session.add(
-                Position(
-                    market_id=proposal.market_id,
-                    side=proposal.side,
-                    stake=proposal.stake,
-                    entry_price=entry_price,
-                    mark_price=entry_price,
-                    unrealized_pnl=0.0,
-                )
-            )
-        session.commit()
-        typer.echo(f"Accepted proposal #{proposal.id}; recorded trade #{trade.id}.")
+    typer.echo(f"Accepted proposal #{outcome.proposal.id}; recorded trade #{outcome.trade.id}.")
 
 
 @app.command()

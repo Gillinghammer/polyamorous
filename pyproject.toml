@@ -28,6 +28,7 @@ develop = [
 
 [project.scripts]
 pm = "pm_analyst.cli:app"
+poly = "pm_analyst.tui.app:run"
 
 [tool.setuptools.packages.find]
 include = ["pm_analyst*"]
