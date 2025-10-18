@@ -135,7 +135,40 @@ class ResearchService:
         last_usage_emit = 0.0
         tool_counts: dict[str, int] = {}
 
-        async for response, chunk in chat.stream():
+        # Emit immediate start message and a heartbeat until first event
+        callback(ResearchProgress(
+            message=(
+                f"Starting Grok research ({self.config.model_name}); tools: web_search, x_search"
+                + (", code_execution" if self.config.enable_code_execution else "")
+                + f"; rounds: {total_rounds}"
+            ),
+            round_number=0,
+            total_rounds=total_rounds,
+        ))
+
+        first_event_seen = False
+        stop_heartbeat = False
+
+        async def _heartbeat() -> None:
+            while not stop_heartbeat:
+                callback(ResearchProgress(
+                    message="Research running… awaiting first tool call",
+                    round_number=max(0, current_round),
+                    total_rounds=total_rounds,
+                ))
+                await asyncio.sleep(3)
+
+        hb_task = asyncio.create_task(_heartbeat())
+
+        try:
+            async for response, chunk in chat.stream():
+                if not first_event_seen:
+                    first_event_seen = True
+                    stop_heartbeat = True
+                    try:
+                        hb_task.cancel()
+                    except Exception:
+                        pass
             if getattr(chunk, "tool_calls", None):
                 current_round = min(total_rounds, current_round + 1)
                 try:
@@ -192,6 +225,13 @@ class ResearchService:
             if response and getattr(response, "citations", None):
                 citations = list(response.citations)
             final_response = response
+
+        finally:
+            stop_heartbeat = True
+            try:
+                hb_task.cancel()
+            except Exception:
+                pass
 
         # Final usage summary if available
         final_message = "Grok synthesis complete. Generating structured output..."

@@ -146,6 +146,12 @@ class PolyApp(App):
         # Hide spinner initially (Textual: set display property after mount)
         spinner = self.query_one("#research-spinner", LoadingIndicator)
         spinner.display = False
+        # Ensure research log scrolls to latest entries during streaming
+        log = self.query_one("#research-log", RichLog)
+        try:
+            log.auto_scroll = True
+        except Exception:
+            pass
 
     @work(exclusive=True)
     async def load_markets(self) -> None:
