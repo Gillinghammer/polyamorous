@@ -4,6 +4,11 @@
 
 A Python TUI (Terminal User Interface) application that helps users research Polymarket polls and make informed predictions. The app displays top liquid polls (excluding sports), runs deep agentic research using Grok 4 (Web + X search) to find asymmetric information, evaluates if the odds justify taking a position, and tracks paper trading performance. Users bring their own xAI (Grok) API key.
 
+**📁 Documentation**: See `docs/` folder for implementation guides:
+- `textual-guide.md` - TUI framework patterns
+- `grok-agentic-guide.md` - Agentic research implementation  
+- `polymarket-client-guide.md` - Market data fetching
+
 ## 2) Goals & Non‑Goals
 
 **Phase 1 Goals**
@@ -68,6 +73,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 ## 5) TUI Experience (Textual Framework)
 
+> **See**: `docs/textual-guide.md` for complete TUI implementation patterns, async workers, and widget examples
+
 **Launch**: `poly` command starts the TUI application
 
 **Visual Style**:
@@ -121,6 +128,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 ### 7.1 Poll Ingestion & Filtering
 
+> **See**: `docs/polymarket-client-guide.md` for complete implementation examples
+
 * Fetch active Polymarket polls with fields: `id, question, options[], current_odds{}, resolves_at, open_interest, volume_24h, category`
 * **Exclude**: All sports-related polls (filter by category)
 * **Select**: Top 20 by liquidity (open_interest + volume_24h combined metric)
@@ -131,6 +140,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
   - Liquidity indicator (High/Med/Low badge)
 
 ### 7.2 Deep Agentic Research (Grok 4)
+
+> **See**: `docs/grok-agentic-guide.md` for streaming implementation and multi-round patterns
 
 **Goal**: Find asymmetric information to accurately forecast poll outcome
 
@@ -157,6 +168,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - Display current research round/activity
 - Show interim findings as they develop
 - Allow user to monitor without blocking TUI
+
+**Implementation**: Use Grok's streaming API with real-time tool call monitoring (see guide)
 
 ### 7.3 Position Evaluation Algorithm
 
@@ -191,6 +204,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - PASS: Why the position isn't justified (weak edge, low confidence, etc.)
 
 ### 7.4 Paper Trading
+
+> **See**: `docs/textual-guide.md` for async worker patterns to handle long-running operations without blocking UI
 
 **Phase 1 Constraints**:
 - Paper trading only (no real money)
@@ -275,13 +290,13 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 **Core**:
 - Python 3.11+
-- Textual 0.40+ (TUI framework from textualize.io)
-- httpx (async HTTP for Polymarket API)
+- Textual 0.40+ (TUI framework from textualize.io) - See `docs/textual-guide.md`
+- py-clob-client (Polymarket API) - See `docs/polymarket-client-guide.md`
 - pydantic (data validation)
 - SQLModel + SQLite (persistence)
 
 **AI/Research**:
-- xAI SDK for Grok 4
+- xAI SDK for Grok 4 - See `docs/grok-agentic-guide.md`
 - Model: `grok-4-fast` (or latest)
 - Tools: Web Search, X Search
 
@@ -289,6 +304,13 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - tenacity (retries)
 - asyncio (async operations)
 - python-dotenv (environment vars)
+
+**📚 Implementation Guides**:
+- `docs/textual-guide.md` - Complete TUI framework guide with async workers, widgets, and layouts
+- `docs/grok-agentic-guide.md` - Agentic research with streaming, multi-round patterns, citations
+- `docs/polymarket-client-guide.md` - Fetch and filter markets, read-only mode for Phase 1
+
+> **Note**: All documentation guides include a note to use Context7 MCP tool for latest information and clarification.
 
 ## 10) Data Sources
 
@@ -396,12 +418,14 @@ Continue researching until you have high confidence OR hit diminishing returns.
 
 ## 13) Phase 1 Scope Summary
 
+> **Implementation Reference**: All features have corresponding examples in `docs/` guides
+
 **IN SCOPE**:
-- ✅ TUI app launched with `poly` command
-- ✅ Display top 20 liquid non-sports polls
-- ✅ User selects poll to research
-- ✅ Deep multi-round Grok research (20-40 min)
-- ✅ Live progress indicators during research
+- ✅ TUI app launched with `poly` command (see `docs/textual-guide.md`)
+- ✅ Display top 20 liquid non-sports polls (see `docs/polymarket-client-guide.md`)
+- ✅ User selects poll to research (ListView widget examples in textual guide)
+- ✅ Deep multi-round Grok research (see `docs/grok-agentic-guide.md`)
+- ✅ Live progress indicators during research (async workers in textual guide)
 - ✅ Position evaluation algorithm (accuracy > frequency)
 - ✅ Paper trading with fixed stakes
 - ✅ Hold positions until expiry
