@@ -126,32 +126,68 @@ class ResearchService:
         citations: list[str] = []
 
         # Streaming via AsyncClient; keep track of the last response
+        from time import monotonic
+        from urllib.parse import urlparse
+        import json as _json
+
         final_response = None
+        last_reasoning_bucket = -1
+        last_usage_emit = 0.0
+        tool_counts: dict[str, int] = {}
+
         async for response, chunk in chat.stream():
             if getattr(chunk, "tool_calls", None):
                 current_round = min(total_rounds, current_round + 1)
                 try:
                     func = chunk.tool_calls[0].function
-                    args_preview = str(func.arguments)
+                    tool_counts[func.name] = tool_counts.get(func.name, 0) + 1
+
+                    # Prefer a human-friendly preview from args
+                    args_preview = ""
+                    try:
+                        args_obj = _json.loads(func.arguments) if isinstance(func.arguments, str) else func.arguments
+                        query = (
+                            (args_obj.get("query") if isinstance(args_obj, dict) else None)
+                            or (args_obj.get("q") if isinstance(args_obj, dict) else None)
+                            or (args_obj.get("keywords") if isinstance(args_obj, dict) else None)
+                            or (args_obj.get("text") if isinstance(args_obj, dict) else None)
+                        )
+                        args_preview = str(query) if query else str(func.arguments)
+                    except Exception:
+                        args_preview = str(func.arguments)
                     if len(args_preview) > 120:
                         args_preview = args_preview[:117] + "..."
-                    message = f"Round {current_round}/{total_rounds}: {func.name} {args_preview}"
+                    message = f"Round {current_round}/{total_rounds}: {func.name} — {args_preview}"
                 except Exception:
                     message = f"Round {current_round}/{total_rounds}: tool_call"
                 callback(ResearchProgress(message=message, round_number=current_round, total_rounds=total_rounds))
                 findings.append(message)
 
+                # Periodic usage summary (every ~3s)
+                now = monotonic()
+                if now - last_usage_emit > 3.0:
+                    summary = ", ".join(f"{k}:{v}" for k, v in tool_counts.items())
+                    callback(ResearchProgress(
+                        message=f"Usage so far: {summary}",
+                        round_number=current_round,
+                        total_rounds=total_rounds,
+                    ))
+                    last_usage_emit = now
+
             if getattr(chunk, "content", None):
                 findings.append(chunk.content)
 
-            # Show thinking progress when available
+            # Throttled thinking progress
             usage = getattr(response, "usage", None)
             if usage and getattr(usage, "reasoning_tokens", None):
-                callback(ResearchProgress(
-                    message=f"Thinking... ({usage.reasoning_tokens} reasoning tokens)",
-                    round_number=current_round,
-                    total_rounds=total_rounds,
-                ))
+                bucket = int(usage.reasoning_tokens) // 200
+                if bucket > last_reasoning_bucket:
+                    last_reasoning_bucket = bucket
+                    callback(ResearchProgress(
+                        message=f"Thinking... ({usage.reasoning_tokens} reasoning tokens)",
+                        round_number=current_round,
+                        total_rounds=total_rounds,
+                    ))
 
             if response and getattr(response, "citations", None):
                 citations = list(response.citations)
@@ -172,6 +208,24 @@ class ResearchService:
             total_rounds=total_rounds,
             completed=True,
         ))
+
+        # Emit top citations with domains for transparency
+        if citations:
+            callback(ResearchProgress(
+                message="Top citations:",
+                round_number=total_rounds,
+                total_rounds=total_rounds,
+            ))
+            for url in citations[:10]:
+                try:
+                    domain = urlparse(url).netloc or url
+                except Exception:
+                    domain = url
+                callback(ResearchProgress(
+                    message=f"- {domain} — {url}",
+                    round_number=total_rounds,
+                    total_rounds=total_rounds,
+                ))
 
         # Retrieve final content from the streamed response (avoid extra call)
         content = getattr(final_response, "content", "")
