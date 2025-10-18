@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import asyncio
 from typing import Dict, List, Optional
 
 from textual import on, work
@@ -230,29 +231,35 @@ class PolyApp(App):
         self._evaluation = None
         self.run_research()
 
-    @work(exclusive=True)
-    async def run_research(self) -> None:
-        """Execute the research workflow for the active market."""
+    @work(exclusive=True, thread=True)
+    def run_research(self) -> None:
+        """Execute the research workflow for the active market in a dedicated thread."""
 
         market = self._active_market
         if market is None:
             return
 
         def callback(progress: ResearchProgress) -> None:
-            # Worker runs in the event loop; update directly
-            self._handle_progress_update(progress)
+            # Crossing thread boundary – schedule UI update safely
+            self.call_from_thread(self._handle_progress_update, progress)
 
-        try:
-            result = await self._research_service.conduct_research(market, callback)
-            evaluation = self._evaluator.evaluate(market, result)
-            # Worker runs in the event loop; update directly
-            self._handle_research_complete(result, evaluation)
-        except Exception as error:
-            log = self.query_one("#research-log", RichLog)
-            log.write(f"Error: {error}")
-            spinner = self.query_one("#research-spinner", LoadingIndicator)
-            spinner.display = False
-            self.notify("Research failed", title="Grok Error")
+        def _run() -> None:
+            try:
+                result = asyncio.run(self._research_service.conduct_research(market, callback))
+                evaluation = self._evaluator.evaluate(market, result)
+                self.call_from_thread(self._handle_research_complete, result, evaluation)
+            except BaseException:
+                import traceback
+                tb = traceback.format_exc()
+                def _fail() -> None:
+                    log = self.query_one("#research-log", RichLog)
+                    log.write("Error during research:\n" + tb)
+                    spinner = self.query_one("#research-spinner", LoadingIndicator)
+                    spinner.display = False
+                    self.notify("Research failed", title="Grok Error")
+                self.call_from_thread(_fail)
+
+        _run()
 
     def _handle_progress_update(self, progress: ResearchProgress) -> None:
         log = self.query_one("#research-log", RichLog)

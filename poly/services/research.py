@@ -23,7 +23,9 @@ class ResearchService:
     config: ResearchConfig
 
     def __post_init__(self) -> None:
-        self._client, self._is_async = self._build_client()
+        # Avoid retaining a client across threads/event loops.
+        # We'll instantiate an AsyncClient inside the research worker.
+        pass
 
     async def conduct_research(
         self,
@@ -35,7 +37,7 @@ class ResearchService:
 
         start = datetime.now(tz=timezone.utc)
 
-        if self._client is None:
+        if util.find_spec("xai_sdk") is None or not os.getenv("XAI_API_KEY"):
             raise RuntimeError(
                 "Grok client unavailable. Set XAI_API_KEY and install xai-sdk to enable research."
             )
@@ -70,7 +72,7 @@ class ResearchService:
         async_cls = getattr(module, "AsyncClient", None)
         if async_cls is None:
             raise RuntimeError("xai-sdk AsyncClient is required; install a recent xai-sdk.")
-        return async_cls(api_key=api_key), True
+        return async_cls(api_key=api_key)
 
     # Simulation removed by design; research requires Grok (xai-sdk + XAI_API_KEY)
 
@@ -89,7 +91,8 @@ class ResearchService:
         web_search = getattr(tools_module, "web_search")
         x_search = getattr(tools_module, "x_search")
 
-        chat = self._client.chat.create(
+        client = self._build_client()
+        chat = client.chat.create(
             model="grok-4-fast",
             tools=[web_search(), x_search()],
         )
@@ -102,7 +105,8 @@ class ResearchService:
         findings: list[str] = []
         citations: list[str] = []
 
-        # Streaming via AsyncClient
+        # Streaming via AsyncClient; keep track of the last response
+        final_response = None
         async for response, chunk in chat.stream():
             if getattr(chunk, "tool_calls", None):
                 current_round = min(total_rounds, current_round + 1)
@@ -115,6 +119,7 @@ class ResearchService:
 
             if response and getattr(response, "citations", None):
                 citations = list(response.citations)
+            final_response = response
 
         callback(
             ResearchProgress(
@@ -125,9 +130,8 @@ class ResearchService:
             )
         )
 
-        # Retrieve final response
-        response = await chat.sample()
-        content = getattr(response, "content", "")
+        # Retrieve final content from the streamed response (avoid extra call)
+        content = getattr(final_response, "content", "")
 
         parsed = _extract_json(content)
         if not parsed:
@@ -139,7 +143,7 @@ class ResearchService:
                 "key_findings": findings[-10:],
             }
 
-        return {
+        result = {
             "prediction": str(parsed.get("prediction", "Yes")),
             "probability": float(parsed.get("probability", 0.5)),
             "confidence": float(parsed.get("confidence", self.config.min_confidence_threshold)),
@@ -147,6 +151,14 @@ class ResearchService:
             "key_findings": list(parsed.get("key_findings", findings))[-20:],
             "citations": citations,
         }
+
+        # Close client to prevent pending tasks on loop shutdown
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+        return result
 
 
 def _build_prompt(market: Market) -> str:
