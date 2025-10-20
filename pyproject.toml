@@ -19,9 +19,9 @@ dependencies = [
 ]
 
 [project.scripts]
-poly = "poly.cli:main"
+polly = "polly.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["poly*"]
+include = ["polly*", "poly_legacy*"]
 

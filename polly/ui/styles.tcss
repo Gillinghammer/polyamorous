@@ -1,0 +1,40 @@
+Screen {
+    background: #0c0f12;
+    color: #c9d1d9;
+}
+
+Header, Footer {
+    background: #111827;
+}
+
+#title {
+    padding: 0 1;
+}
+
+#polls, #outcomes {
+    border: solid #00e1ff;
+}
+
+.urgent {
+    color: #ff5370;
+}
+.soon {
+    color: #ffd166;
+}
+.normal {
+    color: #8bd5ff;
+}
+
+#details-title {
+    color: #00e1ff;
+}
+
+#research-summary {
+    padding: 0 1;
+}
+
+Button {
+    border: tall #00e1ff;
+    margin: 0 1 1 0;
+}
+

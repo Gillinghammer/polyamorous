@@ -3,8 +3,9 @@ textual>=0.40.0
 
 # Polymarket API client
 py-clob-client>=0.20.0
+requests>=2.32.0
 
-# xAI Grok SDK (optional - graceful fallback if missing)
+# xAI Grok SDK (required for research; fail fast if missing)
 xai-sdk>=0.1.0
 
 # Data validation and models

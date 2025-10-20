@@ -25,9 +25,34 @@ class PolymarketService:
         self._client = self._create_client()
 
     async def fetch_top_markets(self) -> List[Market]:
-        """Fetch the top configured markets, falling back to offline samples."""
+        """Fetch the top configured markets (first page)."""
+        return await self.fetch_markets_page(page=1, page_size=self.poll_config.top_n)
 
-        return await asyncio.to_thread(self._fetch_markets_sync)
+    async def fetch_markets_page(self, page: int, page_size: int) -> List[Market]:
+        """Fetch a page of markets using the canonical endpoint and filters."""
+        return await asyncio.to_thread(self._fetch_markets_sync, page, page_size)
+
+    async def fetch_all_markets(self) -> List[Market]:
+        """Fetch all active filtered markets (no slicing)."""
+        return await asyncio.to_thread(self._fetch_markets_sync, None)
+
+    async def fetch_market_by_id(self, condition_id: str) -> Market | None:
+        """Fetch a single market by condition_id."""
+        def _inner() -> Market | None:
+            all_markets = self._fetch_markets_sync(None)
+            for m in all_markets:
+                if m.id == condition_id:
+                    return m
+            return None
+        return await asyncio.to_thread(_inner)
+
+    async def fetch_markets_by_ids(self, condition_ids: list[str]) -> List[Market]:
+        """Fetch multiple markets by condition_ids."""
+        ids_set = set(condition_ids)
+        def _inner() -> List[Market]:
+            all_markets = self._fetch_markets_sync(None)
+            return [m for m in all_markets if m.id in ids_set]
+        return await asyncio.to_thread(_inner)
 
     def _create_client(self):
         """Instantiate the py_clob_client if available."""
@@ -39,8 +64,8 @@ class PolymarketService:
         client = getattr(module, "ClobClient")(HOST)
         return client
 
-    def _fetch_markets_sync(self) -> List[Market]:
-        """Blocking market fetch implementation."""
+    def _fetch_markets_sync(self, page: int | None = 1, page_size: int = 20) -> List[Market]:
+        """Blocking market fetch implementation with pagination slicing."""
 
         markets: List[Market]
         if self._client is None:
@@ -48,9 +73,14 @@ class PolymarketService:
         # Single canonical endpoint for live markets
         raw = self._client.get_sampling_markets()
         raw_markets: Iterable[dict] = raw.get("data", []) if isinstance(raw, dict) else raw
-        markets = self._transform_markets(raw_markets)
+        markets_all = self._transform_markets(raw_markets)
 
-        return markets[: self.poll_config.top_n]
+        # Simple pagination via slicing (server doesn't expose paging for this endpoint)
+        if page is None:
+            return markets_all
+        start = max((int(page) - 1) * page_size, 0)
+        end = max(start + page_size, 0)
+        return markets_all[start:end]
 
     def _transform_markets(self, raw_markets: Iterable[dict]) -> List[Market]:
         """Convert raw markets to domain objects using configured filters."""
@@ -105,13 +135,15 @@ class PolymarketService:
             or market.get("oi")
             or 0.0
         )
-        volume = float(
-            market.get("volume")
-            or market.get("volume24")
-            or market.get("volume24h")
-            or market.get("volume_24h")
-            or 0.0
-        )
+        # Volume keys vary; prefer 24h keys, fallback to lifetime
+        volume = 0.0
+        for key in ("volume24h", "volume_24h", "volume24", "volume"):
+            if market.get(key) is not None:
+                try:
+                    volume = float(market.get(key))
+                except Exception:
+                    volume = 0.0
+                break
         return (
             open_interest * self.poll_config.liquidity_weight_open_interest
             + volume * self.poll_config.liquidity_weight_volume_24h
@@ -132,20 +164,37 @@ class PolymarketService:
             )
             for token in market.get("tokens", [])
         ]
+        # Normalize volume 24h for UI by selecting best-known key
+        vol_24h = 0.0
+        for key in ("volume24h", "volume_24h", "volume24"):
+            if market.get(key) is not None:
+                try:
+                    vol_24h = float(market.get(key))
+                except Exception:
+                    vol_24h = 0.0
+                break
+
+        # Try multiple possible field names for the question
+        question = (
+            market.get("question") or
+            market.get("title") or
+            market.get("name") or
+            market.get("text") or
+            market.get("condition_id", "")  # fallback to ID if no question found
+        )
+
         return Market(
             id=market["condition_id"],
-            question=market.get("question", ""),
+            question=question,
             description=market.get("description", ""),
             category=market.get("category", "Unknown"),
             liquidity=float(
-                market.get("liquidity") or market.get("open_interest") or 0.0
-            ),
-            volume_24h=float(
-                market.get("volume")
-                or market.get("volume24h")
-                or market.get("volume24")
+                market.get("liquidity")
+                or market.get("open_interest")
+                or market.get("liquidity_score")
                 or 0.0
             ),
+            volume_24h=vol_24h,
             end_date=end_date,
             outcomes=outcomes,
             tags=[tag for tag in market.get("tags", [])],

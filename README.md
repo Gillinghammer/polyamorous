@@ -7,36 +7,52 @@ A Python TUI (Terminal User Interface) application for researching Polymarket po
 ### Installation
 
 ```bash
-# Install in editable mode with all dependencies
 pip install -e .
 ```
 
 ### Configuration (Required)
 
-Set up your xAI API key for Grok research:
+Set your xAI API key for Grok research:
 
 ```bash
 export XAI_API_KEY="your_xai_api_key_here"
 ```
 
-Or create a `.env` file in the project root:
-```
-XAI_API_KEY=your_xai_api_key_here
-```
+### Initialize and Ingest
 
-> Note: Research requires a valid xAI API key and network access. No offline/simulated paths are used in production.
+```bash
+python -m polly init --starting-balance 10000
+python -m polly ingest --open-only
+```
 
 ### Run
 
 ```bash
-poly
+python -m polly run
 ```
 
-Or:
+### Agent Settings
 
 ```bash
-python -m poly
+# View settings
+python -m polly settings
+# Enable agent and set window days
+python -m polly settings --agent-enabled 1 --agent-window-days 3
+# Run agent once (idempotent)
+python -m polly agent-run
 ```
+
+### Resolve Closed Markets
+
+```bash
+python -m polly resolve
+```
+
+## Notes
+
+- Uses official Polymarket REST for market data
+- Paper trading only; gateway designed for future real trading
+- SQLite DB path: `~/.config/polly/polly.db`
 
 ## Features
 
@@ -149,4 +165,5 @@ python -m poly
 ---
 
 Built with ❤️ for prediction market traders seeking asymmetric information advantages.
+
 

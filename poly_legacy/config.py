@@ -36,6 +36,9 @@ class ResearchConfig:
 @dataclass(slots=True)
 class PaperTradingConfig:
     default_stake: float = 100.0
+    price_refresh_seconds: int = 60
+    starting_cash: float = 10_000.0
+    max_risk_per_trade_pct: float = 0.02
 
 
 @dataclass(slots=True)
@@ -85,7 +88,10 @@ def load_config(path: Path | None = None) -> AppConfig:
             enable_video_understanding=bool(research.get("enable_video_understanding", True)),
         ),
         paper_trading=PaperTradingConfig(
-            default_stake=float(paper_trading.get("default_stake", 100.0))
+            default_stake=float(paper_trading.get("default_stake", 100.0)),
+            price_refresh_seconds=int(paper_trading.get("price_refresh_seconds", 60)),
+            starting_cash=float(paper_trading.get("starting_cash", 10_000.0)),
+            max_risk_per_trade_pct=float(paper_trading.get("max_risk_per_trade_pct", 0.02)),
         ),
         polls=PollConfig(
             top_n=int(polls.get("top_n", 20)),

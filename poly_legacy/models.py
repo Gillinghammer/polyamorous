@@ -81,6 +81,7 @@ class Trade:
     id: int | None
     market_id: str
     question: str
+    category: str | None
     selected_option: str
     entry_odds: float
     stake_amount: float
@@ -107,3 +108,10 @@ class PortfolioMetrics:
     recent_trades: List[Trade]
     # Aggregate research spend for the session/app lifetime (not persisted yet)
     research_spend_usd: float = 0.0
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    best_category: Optional[str] = None
+    worst_category: Optional[str] = None
+    profit_by_category: Dict[str, float] = field(default_factory=dict)
+    cash_available: float = 0.0
+    cash_in_play: float = 0.0
