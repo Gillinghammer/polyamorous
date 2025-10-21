@@ -1,22 +1,24 @@
 """ASCII banner and welcome message for Polly CLI."""
 
-BANNER = """
-╔═══════════════════════════════════════════════╗
-║   ██████╗  ██████╗ ██╗     ██╗  ██╗   ██╗    ║
-║   ██╔══██╗██╔═══██╗██║     ██║  ╚██╗ ██╔╝    ║
-║   ██████╔╝██║   ██║██║     ██║   ╚████╔╝     ║
-║   ██╔═══╝ ██║   ██║██║     ██║    ╚██╔╝      ║
-║   ██║     ╚██████╔╝███████╗███████╗██║       ║
-║   ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝       ║
-║                                               ║
-║   Polymarket Research & Paper Trading         ║
-╚═══════════════════════════════════════════════╝
+from rich.console import Console
 
-Welcome! Type /help to see available commands.
-"""
+console = Console()
+
+BANNER = """[yellow]╔═══════════════════════════════════════════════╗
+║    ██████╗  ██████╗ ██╗     ██╗  ██╗   ██╗    ║
+║    ██╔══██╗██╔═══██╗██║     ██║  ╚██╗ ██╔╝    ║
+║    ██████╔╝██║   ██║██║     ██║   ╚████╔╝     ║
+║    ██╔═══╝ ██║   ██║██║     ██║    ╚██╔╝      ║
+║    ██║     ╚██████╔╝███████╗███████╗██║       ║
+║    ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝       ║
+║                                               ║
+║           Polymarket Deep Research            ║
+╚═══════════════════════════════════════════════╝[/yellow]
+
+[dim]Welcome! Type [bold]/help[/bold] to see available commands.[/dim]"""
 
 
 def display_banner() -> None:
     """Display the Polly banner."""
-    print(BANNER)
+    console.print(BANNER)
 

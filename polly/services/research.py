@@ -169,62 +169,76 @@ class ResearchService:
                         hb_task.cancel()
                     except Exception:
                         pass
-            if getattr(chunk, "tool_calls", None):
-                current_round = min(total_rounds, current_round + 1)
-                try:
-                    func = chunk.tool_calls[0].function
-                    tool_counts[func.name] = tool_counts.get(func.name, 0) + 1
-
-                    # Prefer a human-friendly preview from args
-                    args_preview = ""
+                
+                # Process tool calls
+                if getattr(chunk, "tool_calls", None):
+                    current_round = min(total_rounds, current_round + 1)
                     try:
-                        args_obj = _json.loads(func.arguments) if isinstance(func.arguments, str) else func.arguments
-                        query = (
-                            (args_obj.get("query") if isinstance(args_obj, dict) else None)
-                            or (args_obj.get("q") if isinstance(args_obj, dict) else None)
-                            or (args_obj.get("keywords") if isinstance(args_obj, dict) else None)
-                            or (args_obj.get("text") if isinstance(args_obj, dict) else None)
-                        )
-                        args_preview = str(query) if query else str(func.arguments)
+                        func = chunk.tool_calls[0].function
+                        tool_counts[func.name] = tool_counts.get(func.name, 0) + 1
+
+                        # Prefer a human-friendly preview from args
+                        args_preview = ""
+                        try:
+                            args_obj = _json.loads(func.arguments) if isinstance(func.arguments, str) else func.arguments
+                            query = (
+                                (args_obj.get("query") if isinstance(args_obj, dict) else None)
+                                or (args_obj.get("q") if isinstance(args_obj, dict) else None)
+                                or (args_obj.get("keywords") if isinstance(args_obj, dict) else None)
+                                or (args_obj.get("text") if isinstance(args_obj, dict) else None)
+                            )
+                            args_preview = str(query) if query else str(func.arguments)
+                        except Exception:
+                            args_preview = str(func.arguments)
+                        if len(args_preview) > 120:
+                            args_preview = args_preview[:117] + "..."
+                        message = f"Round {current_round}/{total_rounds}: {func.name} — {args_preview}"
                     except Exception:
-                        args_preview = str(func.arguments)
-                    if len(args_preview) > 120:
-                        args_preview = args_preview[:117] + "..."
-                    message = f"Round {current_round}/{total_rounds}: {func.name} — {args_preview}"
-                except Exception:
-                    message = f"Round {current_round}/{total_rounds}: tool_call"
-                callback(ResearchProgress(message=message, round_number=current_round, total_rounds=total_rounds))
-                findings.append(message)
+                        message = f"Round {current_round}/{total_rounds}: tool_call"
+                    callback(ResearchProgress(message=message, round_number=current_round, total_rounds=total_rounds))
+                    findings.append(message)
 
-                # Periodic usage summary (every ~3s)
-                now = monotonic()
-                if now - last_usage_emit > 3.0:
-                    summary = ", ".join(f"{k}:{v}" for k, v in tool_counts.items())
-                    callback(ResearchProgress(
-                        message=f"Usage so far: {summary}",
-                        round_number=current_round,
-                        total_rounds=total_rounds,
-                    ))
-                    last_usage_emit = now
+                    # Periodic usage summary (every ~3s)
+                    now = monotonic()
+                    if now - last_usage_emit > 3.0:
+                        summary = ", ".join(f"{k}:{v}" for k, v in tool_counts.items())
+                        callback(ResearchProgress(
+                            message=f"Usage so far: {summary}",
+                            round_number=current_round,
+                            total_rounds=total_rounds,
+                        ))
+                        last_usage_emit = now
 
-            if getattr(chunk, "content", None):
-                findings.append(chunk.content)
+                # Process content chunks
+                if getattr(chunk, "content", None):
+                    findings.append(chunk.content)
 
-            # Throttled thinking progress
-            usage = getattr(response, "usage", None)
-            if usage and getattr(usage, "reasoning_tokens", None):
-                bucket = int(usage.reasoning_tokens) // 200
-                if bucket > last_reasoning_bucket:
-                    last_reasoning_bucket = bucket
-                    callback(ResearchProgress(
-                        message=f"Thinking... ({usage.reasoning_tokens} reasoning tokens)",
-                        round_number=current_round,
-                        total_rounds=total_rounds,
-                    ))
+                # Throttled thinking progress
+                usage = getattr(response, "usage", None)
+                if usage and getattr(usage, "reasoning_tokens", None):
+                    bucket = int(usage.reasoning_tokens) // 200
+                    if bucket > last_reasoning_bucket:
+                        last_reasoning_bucket = bucket
+                        callback(ResearchProgress(
+                            message=f"Thinking... ({usage.reasoning_tokens} reasoning tokens)",
+                            round_number=current_round,
+                            total_rounds=total_rounds,
+                        ))
 
-            if response and getattr(response, "citations", None):
-                citations = list(response.citations)
-            final_response = response
+                # Collect citations as they appear
+                if response and getattr(response, "citations", None):
+                    new_citations = list(response.citations)
+                    # Emit new citations incrementally
+                    if len(new_citations) > len(citations):
+                        for cite in new_citations[len(citations):]:
+                            callback(ResearchProgress(
+                                message=f"📎 Found: {cite}",
+                                round_number=current_round,
+                                total_rounds=total_rounds,
+                            ))
+                    citations = new_citations
+                
+                final_response = response
 
         finally:
             stop_heartbeat = True

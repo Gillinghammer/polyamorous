@@ -100,25 +100,47 @@ def handle_research(
         return
     
     # Run new research
-    console.print("[cyan]Starting deep research... This may take 20-40 minutes.[/cyan]\n")
+    console.print("[cyan]Starting deep research...[/cyan]\n")
     
     progress_messages = []
+    citation_count = 0
     
     def progress_callback(progress: ResearchProgress) -> None:
         """Callback for research progress updates."""
         progress_messages.append(progress.message)
     
     # Run research with live progress display
-    with Live(Panel("Initializing research...", title="Research Progress"), refresh_per_second=2) as live:
+    with Live(Panel("Initializing research...", title="Research Progress"), refresh_per_second=4) as live:
         def update_callback(progress: ResearchProgress) -> None:
+            nonlocal citation_count
             progress_callback(progress)
             
-            # Build content with recent messages
-            recent = progress_messages[-5:]  # Last 5 messages
-            content = "\n".join(f"[dim]{msg}[/dim]" for msg in recent[:-1])
-            if recent:
-                content += f"\n\n[bold]{recent[-1]}[/bold]"
-            content += f"\n\n[cyan]Round {progress.round_number}/{progress.total_rounds}[/cyan]"
+            # Count citations
+            if "📎 Found:" in progress.message:
+                citation_count += 1
+            
+            # Show last 15 messages for better context
+            recent = progress_messages[-15:]
+            
+            # Format messages - highlight tool calls and citations
+            formatted_messages = []
+            for msg in recent:
+                if msg.startswith("Round"):
+                    formatted_messages.append(f"[cyan]{msg}[/cyan]")
+                elif "📎 Found:" in msg:
+                    formatted_messages.append(f"[green]{msg}[/green]")
+                elif "Thinking..." in msg:
+                    formatted_messages.append(f"[yellow]{msg}[/yellow]")
+                elif "Usage so far:" in msg:
+                    formatted_messages.append(f"[magenta]{msg}[/magenta]")
+                else:
+                    formatted_messages.append(f"[dim]{msg}[/dim]")
+            
+            content = "\n".join(formatted_messages)
+            content += f"\n\n[bold]Round {progress.round_number}/{progress.total_rounds}[/bold]"
+            
+            if citation_count > 0:
+                content += f" | [green]{citation_count} citations found[/green]"
             
             if progress.completed:
                 content += "\n\n[green]✓ Research complete![/green]"
