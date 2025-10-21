@@ -76,7 +76,7 @@ class ResearchResult:
 
 @dataclass(slots=True)
 class Trade:
-    """Paper trade stored in SQLite."""
+    """Paper or real trade stored in SQLite."""
 
     id: int | None
     market_id: str
@@ -94,6 +94,8 @@ class Trade:
     actual_outcome: Optional[str]
     profit_loss: Optional[float]
     closed_at: Optional[datetime]
+    trade_mode: str = "paper"  # "paper" or "real"
+    order_id: Optional[str] = None  # Polymarket order ID for real trades
 
 
 @dataclass(slots=True)

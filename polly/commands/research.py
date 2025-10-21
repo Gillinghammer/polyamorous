@@ -7,12 +7,16 @@ from typing import List
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
+from rich.prompt import Confirm
 
-from polly.config import PaperTradingConfig, ResearchConfig
+from polly.commands.trade import get_available_balance, prompt_for_amount
+from polly.config import TradingConfig, ResearchConfig
 from polly.models import Market, ResearchProgress, Trade
 from polly.services.evaluator import PositionEvaluator
 from polly.services.polymarket import PolymarketService
 from polly.services.research import ResearchService
+from polly.services.trading import TradingService
+from polly.services.validators import check_usdc_balance, validate_market_active
 from polly.storage.research import ResearchRepository
 from polly.storage.trades import TradeRepository
 from polly.ui.formatters import format_payout
@@ -29,7 +33,8 @@ def handle_research(
     research_repo: ResearchRepository,
     trade_repo: TradeRepository,
     research_config: ResearchConfig,
-    paper_config: PaperTradingConfig,
+    trading_config: TradingConfig,
+    trading_service: TradingService | None = None,
 ) -> None:
     """Handle /research <poll_id> command.
     
@@ -42,7 +47,8 @@ def handle_research(
         research_repo: Research repository instance
         trade_repo: Trade repository instance
         research_config: Research configuration
-        paper_config: Paper trading configuration
+        trading_config: Trading configuration
+        trading_service: Trading service (required for real trading)
     """
     # Parse poll ID
     if not args.strip():
@@ -79,7 +85,7 @@ def handle_research(
             result=result,
             edge=edge,
             recommendation=recommendation,
-            paper_config=paper_config,
+            trading_config=trading_config,
         )
         
         # Check if user already made a decision
@@ -95,7 +101,8 @@ def handle_research(
                 result=result,
                 research_repo=research_repo,
                 trade_repo=trade_repo,
-                paper_config=paper_config,
+                trading_config=trading_config,
+                trading_service=trading_service,
             )
         return
     
@@ -174,7 +181,7 @@ def handle_research(
         result=result,
         edge=evaluation.edge,
         recommendation=evaluation.recommendation,
-        paper_config=paper_config,
+        trading_config=trading_config,
     )
     
     # Prompt for trade if recommendation is enter
@@ -184,7 +191,8 @@ def handle_research(
             result=result,
             research_repo=research_repo,
             trade_repo=trade_repo,
-            paper_config=paper_config,
+            trading_config=trading_config,
+            trading_service=trading_service,
         )
     else:
         research_repo.set_decision(market.id, "pass")
@@ -195,7 +203,7 @@ def _display_research_result(
     result,
     edge: float,
     recommendation: str,
-    paper_config: PaperTradingConfig,
+    trading_config: TradingConfig,
 ) -> None:
     """Display research results in a formatted panel."""
     
@@ -220,11 +228,11 @@ def _display_research_result(
     if recommendation == "enter":
         market_odds = market.formatted_odds()
         odds = market_odds.get(result.prediction, 0.5)
-        payout_str = format_payout(paper_config.default_stake, odds)
+        payout_str = format_payout(trading_config.default_stake, odds)
         
         content += f"\n[bold green]RECOMMENDATION: ENTER[/bold green]\n"
         content += f"Bet on: {result.prediction} at {odds:.0%}\n"
-        content += f"Potential payout for ${paper_config.default_stake:.0f}: {payout_str}"
+        content += f"Potential payout for ${trading_config.default_stake:.0f}: {payout_str}"
     else:
         content += f"\n[bold yellow]RECOMMENDATION: PASS[/bold yellow]\n"
         content += "Edge or confidence threshold not met."
@@ -237,32 +245,81 @@ def _prompt_for_trade(
     result,
     research_repo: ResearchRepository,
     trade_repo: TradeRepository,
-    paper_config: PaperTradingConfig,
+    trading_config: TradingConfig,
+    trading_service: TradingService | None,
 ) -> None:
-    """Prompt user to enter trade."""
+    """Prompt user to enter trade (paper or real based on config)."""
     
-    console.print(f"\n[bold]Enter trade with ${paper_config.default_stake:.0f} stake? (y/n):[/bold] ", end="")
+    # Determine trading mode
+    is_real_mode = trading_config.mode == "real"
     
-    try:
-        response = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        console.print("\n[yellow]Trade cancelled.[/yellow]")
+    # Get current odds
+    market_odds = market.formatted_odds()
+    odds = market_odds.get(result.prediction, 0.5)
+    
+    # Find the outcome token
+    outcome_token = None
+    for outcome in market.outcomes:
+        if outcome.outcome == result.prediction:
+            outcome_token = outcome
+            break
+    
+    if not outcome_token:
+        console.print("[red]Error: Could not find outcome token[/red]")
         return
     
-    if response == "y":
-        # Get current odds
-        market_odds = market.formatted_odds()
-        odds = market_odds.get(result.prediction, 0.5)
+    # Get available balance
+    available_balance = get_available_balance(trading_config, trade_repo, trading_service)
+    
+    # Prompt for amount with balance and payout display
+    amount = prompt_for_amount(
+        available_balance=available_balance,
+        default_stake=trading_config.default_stake,
+        market_question=market.question,
+        outcome_name=result.prediction,
+        outcome_price=odds,
+        is_real_mode=is_real_mode,
+    )
+    
+    if amount is None:
+        console.print("[yellow]Trade cancelled.[/yellow]")
+        research_repo.set_decision(market.id, "pass")
+        return
+    
+    # Handle real trading mode
+    if is_real_mode:
+        if not trading_service:
+            console.print("[red]Error: Trading service not available. Check POLYGON_PRIVATE_KEY.[/red]")
+            return
         
-        # Create trade
+        # Final confirmation for real money
+        console.print(Panel(f"[bold red]⚠️  REAL MONEY TRADE[/bold red]", style="red"))
+        if not Confirm.ask("Execute real trade?", default=False):
+            console.print("[yellow]Trade cancelled.[/yellow]")
+            research_repo.set_decision(market.id, "pass")
+            return
+        
+        # Calculate shares
+        estimated_shares = amount / odds if odds > 0 else 0
+        
+        # Execute real trade
+        console.print("\n[dim]Executing trade...[/dim]")
+        trade_result = trading_service.execute_market_buy(outcome_token.token_id, estimated_shares)
+        
+        if not trade_result.success:
+            console.print(f"[red]✗ Trade failed: {trade_result.error}[/red]")
+            research_repo.set_decision(market.id, "pass")
+            return
+        
+        # Create trade record with real execution details
         trade = Trade(
             id=None,
             market_id=market.id,
             question=market.question,
             category=market.category,
             selected_option=result.prediction,
-            entry_odds=odds,
-            stake_amount=paper_config.default_stake,
+            entry_odds=trade_result.executed_price,
+            stake_amount=amount,
             entry_timestamp=datetime.now(tz=timezone.utc),
             predicted_probability=result.probability,
             confidence=result.confidence,
@@ -272,15 +329,53 @@ def _prompt_for_trade(
             actual_outcome=None,
             profit_loss=None,
             closed_at=None,
+            trade_mode="real",
+            order_id=trade_result.order_id,
         )
         
-        # Record trade
         saved_trade = trade_repo.record_trade(trade)
         research_repo.set_decision(market.id, "enter")
         
-        console.print(f"\n[green]✓ Trade recorded! Position ID: {saved_trade.id}[/green]")
-        console.print(f"[dim]Stake: ${trade.stake_amount:.2f} | Odds: {odds:.0%} | Expires: {market.end_date.strftime('%Y-%m-%d')}[/dim]")
+        console.print(f"\n[green]✓ REAL trade executed! Position ID: {saved_trade.id}[/green]")
+        console.print(f"[dim]Order ID: {trade_result.order_id}[/dim]")
+        console.print(f"[dim]Executed Price: ${trade_result.executed_price:.3f}[/dim]")
+        console.print(f"[dim]Shares: {trade_result.executed_size:.2f}[/dim]")
+        console.print(f"[dim]Stake: ${amount:.2f} | Expires: {market.end_date.strftime('%Y-%m-%d')}[/dim]")
+    
     else:
-        research_repo.set_decision(market.id, "pass")
-        console.print("\n[yellow]Trade declined.[/yellow]")
+        # Paper trading mode - confirm with simple yes/no
+        console.print(Panel(f"[bold green]PAPER TRADE[/bold green]", style="green"))
+        if not Confirm.ask("Enter paper trade?", default=True):
+            console.print("[yellow]Trade cancelled.[/yellow]")
+            research_repo.set_decision(market.id, "pass")
+            return
+        
+        # Paper trading
+        trade = Trade(
+            id=None,
+            market_id=market.id,
+            question=market.question,
+            category=market.category,
+            selected_option=result.prediction,
+            entry_odds=odds,
+            stake_amount=amount,
+            entry_timestamp=datetime.now(tz=timezone.utc),
+            predicted_probability=result.probability,
+            confidence=result.confidence,
+            research_id=None,
+            status="active",
+            resolves_at=market.end_date,
+            actual_outcome=None,
+            profit_loss=None,
+            closed_at=None,
+            trade_mode="paper",
+            order_id=None,
+        )
+        
+        # Record paper trade
+        saved_trade = trade_repo.record_trade(trade)
+        research_repo.set_decision(market.id, "enter")
+        
+        console.print(f"\n[green]✓ Paper trade recorded! Position ID: {saved_trade.id}[/green]")
+        console.print(f"[dim]Stake: ${trade.stake_amount:.2f} | Odds: {odds:.0%} | Expires: {market.end_date.strftime('%Y-%m-%d')}[/dim]")
 

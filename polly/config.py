@@ -34,11 +34,17 @@ class ResearchConfig:
 
 
 @dataclass(slots=True)
-class PaperTradingConfig:
+class TradingConfig:
+    mode: str = "paper"  # "paper" or "real"
     default_stake: float = 100.0
     price_refresh_seconds: int = 60
     starting_cash: float = 10_000.0
     max_risk_per_trade_pct: float = 0.02
+    # Real trading specific
+    chain_id: int = 137  # Polygon
+    signature_type: int = 0  # 0 for Direct EOA (no proxy), 1 for email/magic, 2 for browser
+    clob_host: str = "https://clob.polymarket.com"
+    polymarket_proxy_address: str = ""  # Polymarket proxy/funder address (only for signature_type 1/2)
 
 
 @dataclass(slots=True)
@@ -52,7 +58,7 @@ class PollConfig:
 @dataclass(slots=True)
 class AppConfig:
     research: ResearchConfig = field(default_factory=ResearchConfig)
-    paper_trading: PaperTradingConfig = field(default_factory=PaperTradingConfig)
+    trading: TradingConfig = field(default_factory=TradingConfig)
     polls: PollConfig = field(default_factory=PollConfig)
     database_path: Path = field(default_factory=lambda: DEFAULT_DB_PATH)
 
@@ -68,7 +74,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         raw: Dict[str, Any] = yaml.safe_load(handle) or {}
 
     research = raw.get("research", {})
-    paper_trading = raw.get("paper_trading", {})
+    # Support both 'trading' and legacy 'paper_trading' keys
+    trading = raw.get("trading", raw.get("paper_trading", {}))
     polls = raw.get("polls", {})
     database = raw.get("database", {})
 
@@ -87,11 +94,16 @@ def load_config(path: Path | None = None) -> AppConfig:
             enable_image_understanding=bool(research.get("enable_image_understanding", True)),
             enable_video_understanding=bool(research.get("enable_video_understanding", True)),
         ),
-        paper_trading=PaperTradingConfig(
-            default_stake=float(paper_trading.get("default_stake", 100.0)),
-            price_refresh_seconds=int(paper_trading.get("price_refresh_seconds", 60)),
-            starting_cash=float(paper_trading.get("starting_cash", 10_000.0)),
-            max_risk_per_trade_pct=float(paper_trading.get("max_risk_per_trade_pct", 0.02)),
+        trading=TradingConfig(
+            mode=str(trading.get("mode", "paper")),
+            default_stake=float(trading.get("default_stake", 100.0)),
+            price_refresh_seconds=int(trading.get("price_refresh_seconds", 60)),
+            starting_cash=float(trading.get("starting_cash", 10_000.0)),
+            max_risk_per_trade_pct=float(trading.get("max_risk_per_trade_pct", 0.02)),
+            chain_id=int(trading.get("chain_id", 137)),
+            signature_type=int(trading.get("signature_type", 0)),  # Default to Direct EOA
+            clob_host=str(trading.get("clob_host", "https://clob.polymarket.com")),
+            polymarket_proxy_address=str(trading.get("polymarket_proxy_address", "")),
         ),
         polls=PollConfig(
             top_n=int(polls.get("top_n", 20)),

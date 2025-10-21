@@ -4,6 +4,7 @@ rich>=13.0.0
 # Polymarket API client
 py-clob-client>=0.20.0
 requests>=2.32.0
+web3>=6.0.0
 
 # xAI Grok SDK (required for research; fail fast if missing)
 xai-sdk>=0.1.0

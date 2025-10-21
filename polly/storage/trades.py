@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS trades (
     resolves_at TEXT NOT NULL,
     actual_outcome TEXT,
     profit_loss REAL,
-    closed_at TEXT
+    closed_at TEXT,
+    trade_mode TEXT DEFAULT 'paper',
+    order_id TEXT
 );
 """
 
@@ -53,8 +55,9 @@ class TradeRepository:
                 INSERT INTO trades (
                     market_id, question, category, selected_option, entry_odds, stake_amount,
                     entry_timestamp, predicted_probability, confidence, research_id,
-                    status, resolves_at, actual_outcome, profit_loss, closed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, resolves_at, actual_outcome, profit_loss, closed_at,
+                    trade_mode, order_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["market_id"],
@@ -72,6 +75,8 @@ class TradeRepository:
                     payload["actual_outcome"],
                     payload["profit_loss"],
                     payload["closed_at"].isoformat() if payload["closed_at"] else None,
+                    payload.get("trade_mode", "paper"),
+                    payload.get("order_id"),
                 ),
             )
             trade_id = cursor.lastrowid
@@ -106,48 +111,55 @@ class TradeRepository:
             rows = cursor.fetchall()
         return [self._row_to_trade(row) for row in rows]
 
-    def metrics(self, starting_cash: float = 0.0) -> PortfolioMetrics:
-        """Compute aggregate portfolio metrics including balances and category stats."""
+    def metrics(self, starting_cash: float = 0.0, filter_mode: str | None = None) -> PortfolioMetrics:
+        """Compute aggregate portfolio metrics including balances and category stats.
+        
+        Args:
+            starting_cash: Starting cash balance for paper trading
+            filter_mode: Optional filter for trade mode ("paper" or "real"). If None, shows all trades.
+        """
 
+        mode_filter = f"AND trade_mode = '{filter_mode}'" if filter_mode else ""
+        
         with self._connect() as connection:
             active_count = connection.execute(
-                "SELECT COUNT(*) FROM trades WHERE status = 'active'"
+                f"SELECT COUNT(*) FROM trades WHERE status = 'active' {mode_filter}"
             ).fetchone()[0]
 
             resolved_rows = connection.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS wins,
                        SUM(stake_amount) AS total_stake, SUM(COALESCE(profit_loss, 0)) AS total_profit,
                        MIN(entry_timestamp) AS first_entry
                 FROM trades
-                WHERE status IN ('won', 'lost')
+                WHERE status IN ('won', 'lost') {mode_filter}
                 """
             ).fetchone()
 
             # Largest win/loss and per-category realized profit
             cat_rows = connection.execute(
-                """
+                f"""
                 SELECT COALESCE(category, 'Unknown') AS category, SUM(COALESCE(profit_loss,0)) AS profit
                 FROM trades
-                WHERE status IN ('won','lost','closed')
+                WHERE status IN ('won','lost','closed') {mode_filter}
                 GROUP BY category
                 """
             ).fetchall()
             realized_rows = connection.execute(
-                """
+                f"""
                 SELECT MAX(COALESCE(profit_loss,0)) AS max_win,
                        MIN(COALESCE(profit_loss,0)) AS max_loss
                 FROM trades
-                WHERE status IN ('won','lost','closed')
+                WHERE status IN ('won','lost','closed') {mode_filter}
                 """
             ).fetchone()
 
             # Balances
             cash_in_play = connection.execute(
-                "SELECT SUM(stake_amount) FROM trades WHERE status = 'active'"
+                f"SELECT SUM(stake_amount) FROM trades WHERE status = 'active' {mode_filter}"
             ).fetchone()[0] or 0.0
             realized_total = connection.execute(
-                "SELECT SUM(COALESCE(profit_loss,0)) FROM trades WHERE status IN ('won','lost','closed')"
+                f"SELECT SUM(COALESCE(profit_loss,0)) FROM trades WHERE status IN ('won','lost','closed') {mode_filter}"
             ).fetchone()[0] or 0.0
 
         total_resolved = resolved_rows[0] or 0
@@ -197,26 +209,28 @@ class TradeRepository:
             cash_in_play=float(cash_in_play),
         )
 
-    def list_active(self) -> List[Trade]:
-        """List all active trades."""
+    def list_active(self, filter_mode: str | None = None) -> List[Trade]:
+        """List all active trades, optionally filtered by mode."""
+        mode_filter = f"AND trade_mode = '{filter_mode}'" if filter_mode else ""
         with self._connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 SELECT * FROM trades
-                WHERE status = 'active'
+                WHERE status = 'active' {mode_filter}
                 ORDER BY entry_timestamp DESC
                 """
             )
             rows = cursor.fetchall()
         return [self._row_to_trade(row) for row in rows]
 
-    def list_history(self, limit: int = 20) -> List[Trade]:
-        """List recently closed trades (won/lost)."""
+    def list_history(self, limit: int = 20, filter_mode: str | None = None) -> List[Trade]:
+        """List recently closed trades (won/lost), optionally filtered by mode."""
+        mode_filter = f"AND trade_mode = '{filter_mode}'" if filter_mode else ""
         with self._connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 SELECT * FROM trades
-                WHERE status IN ('won','lost','closed')
+                WHERE status IN ('won','lost','closed') {mode_filter}
                 ORDER BY closed_at DESC
                 LIMIT ?
                 """,
@@ -270,6 +284,17 @@ class TradeRepository:
     def _row_to_trade(self, row: sqlite3.Row) -> Trade:
         """Convert sqlite row to Trade dataclass."""
 
+        # Handle new columns with backward compatibility
+        try:
+            trade_mode = row["trade_mode"] if "trade_mode" in row.keys() else "paper"
+        except (KeyError, IndexError):
+            trade_mode = "paper"
+        
+        try:
+            order_id = row["order_id"] if "order_id" in row.keys() else None
+        except (KeyError, IndexError):
+            order_id = None
+
         return Trade(
             id=row["id"],
             market_id=row["market_id"],
@@ -287,6 +312,8 @@ class TradeRepository:
             actual_outcome=row["actual_outcome"],
             profit_loss=row["profit_loss"],
             closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
+            trade_mode=trade_mode,
+            order_id=order_id,
         )
 
     def _connect(self) -> sqlite3.Connection:
@@ -303,6 +330,10 @@ class TradeRepository:
             names = {row[1] for row in info}
             if "category" not in names:
                 connection.execute("ALTER TABLE trades ADD COLUMN category TEXT")
+            if "trade_mode" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN trade_mode TEXT DEFAULT 'paper'")
+            if "order_id" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN order_id TEXT")
         except Exception:
             # best-effort; avoid failing app startup
             pass

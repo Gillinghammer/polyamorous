@@ -3,7 +3,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
@@ -15,6 +15,7 @@ from polly.models import Market
 from polly.services.evaluator import PositionEvaluator
 from polly.services.polymarket import PolymarketService
 from polly.services.research import ResearchService
+from polly.services.trading import TradingService
 from polly.storage.research import ResearchRepository
 from polly.storage.trades import TradeRepository
 from polly.ui.banner import display_banner
@@ -25,6 +26,7 @@ from polly.commands.polls import handle_polls
 from polly.commands.portfolio import handle_portfolio
 from polly.commands.history import handle_history
 from polly.commands.research import handle_research
+from polly.commands.trade import handle_trade, handle_close
 
 console = Console()
 
@@ -45,7 +47,36 @@ class CommandContext:
         self.evaluator = PositionEvaluator(config.research)
         self.trade_repo = TradeRepository(config.database_path)
         self.research_repo = ResearchRepository(config.database_path)
+        self.trading_service = self._create_trading_service()
         self.markets_cache: List[Market] = []
+    
+    def _create_trading_service(self) -> Optional[TradingService]:
+        """Create trading service if in real mode."""
+        if self.config.trading.mode != "real":
+            return None
+        
+        private_key = os.getenv("POLYGON_PRIVATE_KEY")
+        if not private_key:
+            console.print("[yellow]Warning: POLYGON_PRIVATE_KEY not set. Real trading disabled.[/yellow]")
+            console.print("[dim]To enable real trading, add POLYGON_PRIVATE_KEY to your .env file[/dim]\n")
+            return None
+        
+        try:
+            # Use Direct EOA mode if no proxy configured
+            signature_type = self.config.trading.signature_type if self.config.trading.signature_type > 0 else 0
+            funder = self.config.trading.polymarket_proxy_address if self.config.trading.polymarket_proxy_address else ""
+            
+            return TradingService(
+                private_key=private_key,
+                chain_id=self.config.trading.chain_id,
+                host=self.config.trading.clob_host,
+                signature_type=signature_type,
+                funder=funder,
+            )
+        except Exception as e:
+            console.print(f"[red]Error initializing trading service: {e}[/red]")
+            console.print("[yellow]Real trading disabled[/yellow]\n")
+            return None
 
 
 def check_api_key() -> bool:
@@ -80,9 +111,13 @@ research:
   topic_count_min: 10
   topic_count_max: 20
 
-paper_trading:
+trading:
+  mode: paper  # "paper" or "real"
   default_stake: 100
   starting_cash: 10000
+  # Real trading settings (only used when mode: real)
+  chain_id: 137
+  clob_host: "https://clob.polymarket.com"
 
 polls:
   top_n: 20
@@ -130,14 +165,36 @@ def route_command(command: str, context: CommandContext) -> None:
             research_repo=context.research_repo,
             trade_repo=context.trade_repo,
             research_config=context.config.research,
-            paper_config=context.config.paper_trading,
+            trading_config=context.config.trading,
+            trading_service=context.trading_service,
         )
     
     elif cmd == "/portfolio":
-        handle_portfolio(context.trade_repo, context.config.paper_trading)
+        handle_portfolio(
+            context.trade_repo,
+            context.config.trading,
+            context.trading_service,
+        )
     
     elif cmd == "/history":
         handle_history(args, context.research_repo, context.polymarket)
+    
+    elif cmd == "/trade":
+        handle_trade(
+            args,
+            context.markets_cache,
+            context.trading_service,
+            context.trade_repo,
+            context.config.trading,
+        )
+    
+    elif cmd == "/close":
+        handle_close(
+            args,
+            context.trade_repo,
+            context.trading_service,
+            context.config.trading,
+        )
     
     elif cmd == "/exit":
         console.print("[yellow]Goodbye![/yellow]")

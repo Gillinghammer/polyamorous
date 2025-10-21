@@ -12,6 +12,8 @@ HELP_TEXT = """
   [yellow]/research <poll_id>[/yellow]       Run deep research on a poll
   [yellow]/history [status][/yellow]         View research history (completed/pending/archived)
   [yellow]/portfolio[/yellow]                View trading performance
+  [yellow]/trade <market> <outcome> [amt][/yellow]  Manually execute trade (real mode only)
+  [yellow]/close <trade_id>[/yellow]         Close active position (real mode only)
   [yellow]/help[/yellow]                     Show this help
   [yellow]/exit[/yellow]                     Quit Polly
 
@@ -24,9 +26,12 @@ HELP_TEXT = """
   /polls 14 trump        Polls ending in 14 days mentioning "trump"
   /research 1            Run research on poll #1 from polls list
   /history completed     Show completed research
-  /portfolio             View your paper trading stats
+  /portfolio             View your trading stats
+  /trade 5 Yes 100       Trade $100 on "Yes" for market #5 (real mode)
+  /close 12              Close trade #12 (real mode)
   
 [dim]Search matches: question, category, description, and tags[/dim]
+[dim]Trading mode set in config: mode: paper or mode: real[/dim]
 """
 
 
