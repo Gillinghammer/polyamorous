@@ -17,6 +17,7 @@ from polly.services.validators import (
     validate_trade_size,
 )
 from polly.storage.trades import TradeRepository
+from polly.ui.formatters import format_profit
 
 console = Console()
 
@@ -258,6 +259,7 @@ def handle_close(
     trade_repo: TradeRepository,
     trading_service: Optional[TradingService],
     trading_config: TradingConfig,
+    markets_cache: List[Market] = None,
 ) -> None:
     """Handle /close <trade_id> command.
 
@@ -266,6 +268,7 @@ def handle_close(
         trade_repo: Trade repository
         trading_service: Trading service instance
         trading_config: Trading configuration
+        markets_cache: Optional cached markets for token lookup
     """
     # Check if in real trading mode
     if trading_config.mode != "real":
@@ -281,6 +284,7 @@ def handle_close(
     if not args.strip():
         console.print("[red]Usage: /close <trade_id>[/red]")
         console.print("[dim]Example: /close 5[/dim]")
+        console.print("[dim]Use /portfolio to see active position IDs[/dim]")
         return
 
     try:
@@ -290,7 +294,7 @@ def handle_close(
         return
 
     # Get all active trades to find the one to close
-    active_trades = trade_repo.list_active()
+    active_trades = trade_repo.list_active(filter_mode="real")
     trade_to_close = None
 
     for trade in active_trades:
@@ -299,36 +303,73 @@ def handle_close(
             break
 
     if not trade_to_close:
-        console.print(f"[red]Active trade with ID {trade_id} not found[/red]")
+        console.print(f"[red]Active real trade with ID {trade_id} not found[/red]")
+        console.print("[dim]Use /portfolio to see active positions[/dim]")
         return
 
-    # Only allow closing real trades via this command
-    if trade_to_close.trade_mode != "real":
-        console.print("[yellow]This is a paper trade. It will resolve automatically at market expiry.[/yellow]")
+    # Get live position data to find token_id and shares
+    live_positions = trading_service.get_live_positions()
+    
+    matching_position = None
+    for pos in live_positions:
+        if pos.get('conditionId') == trade_to_close.market_id and pos.get('outcome') == trade_to_close.selected_option:
+            matching_position = pos
+            break
+    
+    if not matching_position:
+        console.print("[red]Could not find live position data for this trade[/red]")
+        console.print("[dim]The position may have been manually closed or resolved already[/dim]")
         return
-
-    # Display trade summary
+    
+    # Extract position details
+    token_id = matching_position.get('asset')
+    current_size = float(matching_position.get('size', 0))
+    current_price = float(matching_position.get('curPrice', 0))
+    current_value = float(matching_position.get('currentValue', 0))
+    unrealized_pnl = float(matching_position.get('cashPnl', 0))
+    
+    # Display position summary with current market data
     console.print()
     console.print(Panel(f"[bold yellow]Close Position[/bold yellow]", style="yellow"))
     console.print()
     console.print(f"[bold]Trade ID:[/bold] {trade_to_close.id}")
     console.print(f"[bold]Market:[/bold] {trade_to_close.question}")
     console.print(f"[bold]Position:[/bold] {trade_to_close.selected_option}")
+    console.print(f"[bold]Shares:[/bold] {current_size:.2f}")
     console.print(f"[bold]Entry Price:[/bold] ${trade_to_close.entry_odds:.3f}")
-    console.print(f"[bold]Stake:[/bold] ${trade_to_close.stake_amount:.2f}")
+    console.print(f"[bold]Current Price:[/bold] ${current_price:.3f}")
+    console.print(f"[bold]Cost Basis:[/bold] ${trade_to_close.stake_amount:.2f}")
+    console.print(f"[bold]Current Value:[/bold] ${current_value:.2f}")
+    
+    pnl_color = "green" if unrealized_pnl >= 0 else "red"
+    pnl_sign = "+" if unrealized_pnl >= 0 else ""
+    console.print(f"[bold]Unrealized P&L:[/bold] [{pnl_color}]{pnl_sign}${unrealized_pnl:.2f}[/{pnl_color}]")
     console.print()
 
-    # We need to determine the token_id and shares to sell
-    # For now, we need to fetch current market data or store token_id with trade
-    # This is a limitation - we'll need the token_id
-    console.print("[yellow]Note: Position closing requires market lookup[/yellow]")
-    console.print("[dim]Feature requires storing token_id with trade - will be added in future update[/dim]")
-    
-    # TODO: Full implementation requires:
-    # 1. Store token_id in Trade model
-    # 2. Calculate shares from stake_amount and entry_odds
-    # 3. Execute sell order
-    # 4. Update trade record with exit details
-    
-    console.print("[yellow]Manual position closing will be fully implemented in next update[/yellow]")
+    # Confirm closure
+    if not Confirm.ask("Close this position at current market price?", default=False):
+        console.print("[yellow]Position close cancelled[/yellow]")
+        return
+
+    # Execute sell order
+    console.print("\n[dim]Executing market sell...[/dim]")
+    result = trading_service.execute_market_sell(token_id, current_size)
+
+    if result.success:
+        # Update trade in database
+        from datetime import datetime, timezone
+        final_pnl = current_value - trade_to_close.stake_amount
+        
+        trade_repo.update_trade_outcome(
+            trade_id=trade_to_close.id,
+            actual_outcome=trade_to_close.selected_option,  # Manually closed
+            profit_loss=final_pnl
+        )
+
+        console.print("[green]✓ Position closed successfully[/green]")
+        console.print(f"[dim]Order ID: {result.order_id}[/dim]")
+        console.print(f"[dim]Exit Price: ${result.executed_price:.3f}[/dim]")
+        console.print(f"[dim]Final P&L: {format_profit(final_pnl)}[/dim]")
+    else:
+        console.print(f"[red]✗ Position close failed: {result.error}[/red]")
 

@@ -70,9 +70,18 @@ def handle_portfolio(
         
         # Display active positions (filtered by current mode)
         active_trades = trade_repo.list_active(filter_mode=trading_config.mode)
+        
+        # For real mode, enrich with live Polymarket data
+        live_positions = []
+        if trading_config.mode == "real" and trading_service:
+            try:
+                live_positions = trading_service.get_live_positions()
+            except Exception as e:
+                console.print(f"[dim]Could not fetch live positions: {e}[/dim]")
+        
         if active_trades:
             console.print()
-            table = create_active_positions_table(active_trades)
+            table = create_active_positions_table(active_trades, live_positions)
             console.print(table)
         else:
             console.print("\n[dim]No active positions[/dim]")

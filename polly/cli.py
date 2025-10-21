@@ -194,6 +194,7 @@ def route_command(command: str, context: CommandContext) -> None:
             context.trade_repo,
             context.trading_service,
             context.config.trading,
+            context.markets_cache,
         )
     
     elif cmd == "/exit":

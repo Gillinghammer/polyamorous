@@ -12,12 +12,18 @@
    echo "XAI_API_KEY=your_api_key_here" > .env
    ```
 
-2. **Install Polly**:
+2. **(Optional) For Real Trading - Add Polygon Private Key**:
+   ```bash
+   echo "POLYGON_PRIVATE_KEY=your_polygon_private_key_here" >> .env
+   ```
+   ⚠️ **Security**: Keep your `.env` file private! Never commit it to git.
+
+3. **Install Polly**:
    ```bash
    pip install -e .
    ```
 
-3. **Launch**:
+4. **Launch**:
    ```bash
    polly
    ```
@@ -40,6 +46,10 @@
 
 # View research history
 /history
+
+# Manual trading (real mode only)
+/trade 5 Yes 100    # Trade $100 on "Yes" for market #5
+/close 12           # Close trade #12
 
 # Get help
 /help
@@ -65,6 +75,23 @@ polly> /p          # Type /p then press Up
 
 History is saved to `~/.polly/history.txt` and persists across sessions.
 
+## Trading Modes
+
+### Paper Trading (Default)
+- No real money required
+- Perfect for testing and learning
+- Simulated trades tracked locally
+
+### Real Trading (Phase 2)
+- Execute actual trades on Polymarket
+- Requires: Polygon wallet private key + USDC balance
+- Enable by editing `~/.polly/config.yml`:
+  ```yaml
+  trading:
+    mode: real  # Change from "paper" to "real"
+  ```
+- ⚠️ **Always test with paper trading first!**
+
 ## First Time Setup
 
 On first launch, Polly will:
@@ -82,9 +109,11 @@ research:
   min_edge_threshold: 0.10        # Min edge over market (10%)
   default_rounds: 20              # Research depth
 
-paper_trading:
+trading:
+  mode: paper                     # "paper" or "real"
   default_stake: 100              # Stake per trade
   starting_cash: 10000            # Starting balance
+  chain_id: 137                   # Polygon network (for real trading)
 ```
 
 ## Typical Workflow

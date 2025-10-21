@@ -598,6 +598,35 @@ class TradingService:
                 executed_size=0.0,
             )
 
+    def get_live_positions(self) -> list[dict]:
+        """Fetch live positions from Polymarket Data API.
+        
+        Returns:
+            List of position dictionaries with current values and P&L
+        """
+        try:
+            import requests
+            
+            # Use the EOA address for Direct EOA mode, or funder for proxy mode
+            user_address = self.funder if (self.funder and self.signature_type > 0) else self._address
+            
+            url = f"https://data-api.polymarket.com/positions?user={user_address}"
+            
+            print(f"[DEBUG] Fetching positions from Polymarket Data API for {user_address[:10]}...")
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                positions = response.json()
+                print(f"[DEBUG] Found {len(positions)} positions")
+                return positions
+            else:
+                print(f"[DEBUG] Positions API error: {response.status_code} - {response.text}")
+                return []
+                
+        except Exception as e:
+            print(f"[DEBUG] Failed to fetch positions: {e}")
+            return []
+    
     def get_balances(self) -> dict:
         """Get wallet balances (USDC and positions).
 

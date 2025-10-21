@@ -135,29 +135,73 @@ def create_portfolio_panel(metrics: PortfolioMetrics) -> Panel:
     return Panel(content, title="Portfolio Metrics", border_style="blue")
 
 
-def create_active_positions_table(trades: List[Trade]) -> Table:
-    """Create Rich table for active positions."""
+def create_active_positions_table(trades: List[Trade], live_positions: List[dict] = None) -> Table:
+    """Create Rich table for active positions with live data if available.
+    
+    Args:
+        trades: List of Trade objects from database
+        live_positions: Optional list of live position data from Polymarket API
+    """
+    # Map live positions by condition_id for quick lookup
+    live_by_market = {}
+    if live_positions:
+        for pos in live_positions:
+            market_id = pos.get('conditionId')
+            if market_id:
+                live_by_market[market_id] = pos
+    
+    # Add extra columns if we have live data
+    has_live_data = bool(live_by_market)
+    
     table = Table(title="Active Positions", show_header=True, header_style="bold cyan")
     
-    table.add_column("Question", style="white", width=40)
-    table.add_column("Bet", style="yellow", width=15)
-    table.add_column("Odds", style="magenta", width=8)
-    table.add_column("Days Left", style="green", width=10)
+    table.add_column("ID", style="dim", width=3)
+    table.add_column("Question", style="white", width=35)
+    table.add_column("Bet", style="yellow", width=12)
+    table.add_column("Entry", style="magenta", width=8)
+    
+    if has_live_data:
+        table.add_column("Current", style="cyan", width=8)
+        table.add_column("Value", style="green", width=10)
+        table.add_column("P&L", style="white", width=12)
+    else:
+        table.add_column("Days Left", style="green", width=10)
     
     for trade in trades:
         question = trade.question
-        if len(question) > 37:
-            question = question[:34] + "..."
+        if len(question) > 32:
+            question = question[:29] + "..."
         
         from datetime import datetime, timezone
         days_left = (trade.resolves_at - datetime.now(tz=timezone.utc)).days
         
-        table.add_row(
-            question,
-            trade.selected_option,
-            f"{trade.entry_odds:.0%}",
-            f"{days_left}d"
-        )
+        # Get live position data if available
+        live_data = live_by_market.get(trade.market_id)
+        
+        if has_live_data and live_data:
+            current_price = float(live_data.get('curPrice', 0))
+            current_value = float(live_data.get('currentValue', 0))
+            cash_pnl = float(live_data.get('cashPnl', 0))
+            
+            pnl_str = format_profit(cash_pnl)
+            
+            table.add_row(
+                str(trade.id),
+                question,
+                trade.selected_option,
+                f"{trade.entry_odds:.0%}",
+                f"{current_price:.0%}",
+                f"${current_value:.2f}",
+                pnl_str
+            )
+        else:
+            table.add_row(
+                str(trade.id),
+                question,
+                trade.selected_option,
+                f"{trade.entry_odds:.0%}",
+                f"{days_left}d"
+            )
     
     return table
 

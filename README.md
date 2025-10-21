@@ -1,13 +1,14 @@
-# Polly - Polymarket Research & Paper Trading
+# Polly - Polymarket Research & Trading
 
-A command-based application for researching Polymarket prediction markets using deep AI analysis (Grok 4) and tracking paper trades.
+A command-based application for researching Polymarket prediction markets using deep AI analysis (Grok 4) and executing trades (paper or real).
 
 ## Features
 
 - **Browse Polls**: Fetch and filter Polymarket markets by time-to-expiry
 - **Deep Research**: Run multi-round AI research (20-40 min) using Grok 4 with Web + X search
 - **Position Evaluation**: Algorithmic evaluation of whether current odds justify taking a position
-- **Paper Trading**: Track hypothetical trades with performance metrics
+- **Paper Trading**: Track hypothetical trades with performance metrics (default mode)
+- **Real Trading**: Execute actual trades on Polymarket with wallet integration (Phase 2)
 - **Research History**: View past research and recommendations
 - **Portfolio Analytics**: Win rate, profit metrics, and projected APR
 
@@ -17,6 +18,7 @@ A command-based application for researching Polymarket prediction markets using 
 
 - Python 3.11+
 - xAI API Key (get from [console.x.ai](https://console.x.ai/))
+- **For Real Trading**: Polygon wallet private key and USDC on Polygon network
 
 ### Setup
 
@@ -40,6 +42,13 @@ Or create a `.env` file:
 ```bash
 echo "XAI_API_KEY=your_api_key_here" > .env
 ```
+
+4. **For Real Trading** (optional): Add your Polygon private key:
+```bash
+echo "POLYGON_PRIVATE_KEY=your_polygon_private_key_here" >> .env
+```
+
+⚠️ **Security Warning**: Never commit your `.env` file or share your private keys!
 
 ## Usage
 
@@ -94,6 +103,21 @@ polly> /history archived     # Polls that have resolved
 polly> /portfolio           # Show performance metrics and active positions
 ```
 
+#### Manual Trading (Real Mode Only)
+```bash
+polly> /trade <market_num> <outcome> [amount]  # Execute a trade manually
+polly> /close <trade_id>                        # Close an active position
+```
+
+Examples:
+```bash
+polly> /polls                  # List markets
+polly> /trade 5 Yes 100        # Buy $100 of "Yes" on market #5
+polly> /close 12               # Close trade #12
+```
+
+⚠️ **Note**: `/trade` and `/close` commands only work when `mode: real` is set in config.
+
 #### Help
 ```bash
 polly> /help               # Show command reference
@@ -127,6 +151,39 @@ polly> /p                # Type /p
 - Persists across sessions
 - Unlimited history entries
 
+## Trading Modes
+
+Polly supports two trading modes:
+
+### Paper Trading (Default)
+- Simulated trades with no real money
+- Perfect for testing strategies and learning
+- No wallet or funds required
+- All positions tracked in local database
+
+### Real Trading (Phase 2)
+- Execute actual trades on Polymarket
+- Requires:
+  - Polygon wallet private key in `.env`
+  - USDC on Polygon network for trading
+- All safety confirmations required
+- Double confirmation for real money trades
+
+### Switching Modes
+
+Edit `~/.polly/config.yml`:
+
+```yaml
+trading:
+  mode: paper  # Change to "real" for live trading
+```
+
+⚠️ **Warning**: 
+- Real trading uses actual money on the Polygon blockchain
+- Always test with paper trading first
+- Ensure you have sufficient USDC balance
+- Private keys must be kept secure
+
 ## Configuration
 
 Polly creates a config file at `~/.polly/config.yml` on first run. Customize settings:
@@ -138,9 +195,13 @@ research:
   model_name: "grok-4-fast"       # Grok model to use
   default_rounds: 20              # Number of research rounds
 
-paper_trading:
+trading:
+  mode: paper                     # Trading mode: "paper" or "real"
   default_stake: 100              # Fixed stake per trade ($)
   starting_cash: 10000            # Initial paper trading balance ($)
+  # Real trading settings (only used when mode: real)
+  chain_id: 137                   # Polygon network
+  clob_host: "https://clob.polymarket.com"
 
 polls:
   top_n: 20                       # Number of polls to display
