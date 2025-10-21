@@ -13,6 +13,8 @@ USDC_CONTRACT_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"  # Native U
 USDC_E_CONTRACT_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Bridged USDC.e
 # Polymarket CTF Exchange contract
 CTF_EXCHANGE_ADDRESS = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+# CTF (Conditional Token Framework) contract
+CTF_CONTRACT_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 POLYGON_RPC_URL = "https://polygon-rpc.com"
 
 # ERC20 ABI for approve function
@@ -25,6 +27,20 @@ ERC20_APPROVE_ABI = [
         ],
         "name": "approve",
         "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    }
+]
+
+# ERC1155 ABI for setApprovalForAll (CTF tokens)
+ERC1155_APPROVAL_ABI = [
+    {
+        "constant": False,
+        "inputs": [
+            {"name": "operator", "type": "address"},
+            {"name": "approved", "type": "bool"}
+        ],
+        "name": "setApprovalForAll",
+        "outputs": [],
         "type": "function"
     }
 ]
@@ -102,54 +118,79 @@ class TradingService:
             # Max uint256 for unlimited approval
             max_approval = 2**256 - 1
             
-            # Approve both USDC and USDC.e to be safe (from EOA wallet)
+            # Approve both USDC (for buying) and CTF tokens (for selling)
             print(f"[DEBUG] Approving from EOA wallet: {account.address[:10]}...")
             
-            contracts_to_approve = [
+            # 1. Approve USDC/USDC.e for buying (ERC20)
+            usdc_contracts = [
                 ("USDC.e (bridged)", USDC_E_CONTRACT_ADDRESS),
                 ("USDC (native)", USDC_CONTRACT_ADDRESS)
             ]
             
             last_tx_hash = None
-            for token_name, token_address in contracts_to_approve:
-                print(f"[DEBUG] Approving {token_name} spending for CTF Exchange...")
+            for token_name, token_address in usdc_contracts:
+                print(f"[DEBUG] Approving {token_name} for buying...")
                 
                 usdc_contract = w3.eth.contract(
                     address=Web3.to_checksum_address(token_address),
                     abi=ERC20_APPROVE_ABI
                 )
                 
-                # Build approve transaction from the EOA
+                # Build approve transaction
                 approve_txn = usdc_contract.functions.approve(
                     Web3.to_checksum_address(CTF_EXCHANGE_ADDRESS),
                     max_approval
                 ).build_transaction({
-                    'from': account.address,  # Sign from EOA, not proxy
+                    'from': account.address,
                     'nonce': w3.eth.get_transaction_count(account.address),
-                    'gas': 100000,  # Standard gas limit for approve
+                    'gas': 100000,
                     'gasPrice': w3.eth.gas_price,
                     'chainId': self.chain_id
                 })
                 
-                print(f"[DEBUG] Signing {token_name} transaction...")
                 signed_txn = account.sign_transaction(approve_txn)
-                
-                print(f"[DEBUG] Sending {token_name} transaction to Polygon...")
                 tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
                 last_tx_hash = tx_hash
                 
-                print(f"[DEBUG] Transaction sent! Hash: {tx_hash.hex()}")
-                print(f"[DEBUG] Waiting for confirmation...")
-                
-                # Wait for transaction receipt (with timeout)
+                print(f"[DEBUG] {token_name} approval tx: {tx_hash.hex()[:16]}...")
                 receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                 
                 if receipt['status'] == 1:
-                    print(f"[DEBUG] ✓ {token_name} approval confirmed! Block: {receipt['blockNumber']}")
+                    print(f"[DEBUG] ✓ {token_name} approved! Block: {receipt['blockNumber']}")
                 else:
-                    return (False, f"{token_name} approval transaction failed. Tx: {tx_hash.hex()}")
+                    return (False, f"{token_name} approval failed. Tx: {tx_hash.hex()}")
             
-            return (True, f"USDC/USDC.e allowances approved! Last Tx: {last_tx_hash.hex()[:16]}...")
+            # 2. Approve CTF tokens for selling (ERC1155 - setApprovalForAll)
+            print(f"[DEBUG] Approving CTF tokens for selling...")
+            
+            ctf_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(CTF_CONTRACT_ADDRESS),
+                abi=ERC1155_APPROVAL_ABI
+            )
+            
+            # Build setApprovalForAll transaction
+            ctf_approval_txn = ctf_contract.functions.setApprovalForAll(
+                Web3.to_checksum_address(CTF_EXCHANGE_ADDRESS),
+                True  # Approve all CTF tokens
+            ).build_transaction({
+                'from': account.address,
+                'nonce': w3.eth.get_transaction_count(account.address),
+                'gas': 100000,
+                'gasPrice': w3.eth.gas_price,
+                'chainId': self.chain_id
+            })
+            
+            signed_ctf_txn = account.sign_transaction(ctf_approval_txn)
+            ctf_tx_hash = w3.eth.send_raw_transaction(signed_ctf_txn.raw_transaction)
+            
+            print(f"[DEBUG] CTF approval tx: {ctf_tx_hash.hex()[:16]}...")
+            ctf_receipt = w3.eth.wait_for_transaction_receipt(ctf_tx_hash, timeout=120)
+            
+            if ctf_receipt['status'] == 1:
+                print(f"[DEBUG] ✓ CTF tokens approved! Block: {ctf_receipt['blockNumber']}")
+                return (True, f"All allowances approved! USDC for buying, CTF for selling.")
+            else:
+                return (False, f"CTF approval failed. Tx: {ctf_tx_hash.hex()}")
                 
         except Exception as e:
             error_msg = f"Failed to approve allowance: {type(e).__name__}: {str(e)}"
@@ -558,7 +599,85 @@ class TradingService:
             signed_order = self._client.create_order(order_args)
 
             # Post as Good-Till-Cancelled order
-            resp = self._client.post_order(signed_order, OrderType.GTC)
+            try:
+                resp = self._client.post_order(signed_order, OrderType.GTC)
+                print(f"[DEBUG] Sell order response: {resp}")
+            except Exception as post_error:
+                # Extract detailed error
+                error_detail = str(post_error)
+                print(f"[DEBUG] Sell post error: {post_error}")
+                if hasattr(post_error, 'error_message'):
+                    print(f"[DEBUG] Sell error message: {post_error.error_message}")
+                    if isinstance(post_error.error_message, dict):
+                        error_detail = post_error.error_message.get('error', error_detail)
+                
+                # Handle allowance error with automatic approval for SELL orders
+                if "balance / allowance" in error_detail or "allowance" in error_detail.lower():
+                    print(f"\n[yellow]CTF token allowance required for selling. Attempting to approve...[/yellow]")
+                    print(f"[dim]This is a one-time on-chain transaction (costs ~$0.01 in gas)[/dim]\n")
+                    
+                    allowance_ok, allowance_msg = self.approve_allowance()
+                    
+                    if allowance_ok:
+                        print(f"\n[green]✓ Allowance approved successfully![/green]")
+                        print(f"[dim]Waiting for blockchain state to propagate...[/dim]")
+                        
+                        # Give the blockchain a moment to propagate the allowance
+                        import time
+                        time.sleep(5)
+                        
+                        print(f"[dim]Retrying sell order...[/dim]\n")
+                        
+                        # Retry the sell order
+                        try:
+                            resp = self._client.post_order(signed_order, OrderType.GTC)
+                            print(f"[DEBUG] Retry sell response: {resp}")
+                            
+                            # Check response
+                            if isinstance(resp, dict):
+                                success = resp.get("success", False)
+                                order_id = resp.get("orderID")
+                                error = resp.get("error")
+                                if error and not success:
+                                    error = f"{error} | Response: {resp}"
+                            else:
+                                success = False
+                                order_id = None
+                                error = f"Unexpected response type: {type(resp)}"
+                            
+                            return TradeExecutionResult(
+                                success=success,
+                                order_id=order_id,
+                                error=error,
+                                executed_price=price,
+                                executed_size=size,
+                            )
+                        except Exception as retry_error:
+                            retry_detail = str(retry_error)
+                            if hasattr(retry_error, 'error_message') and isinstance(retry_error.error_message, dict):
+                                retry_detail = retry_error.error_message.get('error', retry_detail)
+                            
+                            return TradeExecutionResult(
+                                success=False,
+                                order_id=None,
+                                error=f"Sell retry failed: {retry_detail}",
+                                executed_price=0.0,
+                                executed_size=0.0,
+                            )
+                    else:
+                        error_detail = f"Failed to approve allowance: {allowance_msg}"
+                
+                # Provide helpful error message for other errors
+                elif "invalid amount" in error_detail or "min size" in error_detail:
+                    pass  # Already clear
+                
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"{error_detail}",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
 
             # Check response (handle both dict and exception cases)
             if isinstance(resp, dict):
