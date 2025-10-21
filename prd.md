@@ -1,11 +1,10 @@
-# PRD: Poly - TUI Polymarket Research & Paper Trading
+# PRD: Polly - Command-Based Polymarket Research & Paper Trading
 
 ## 1) Summary
 
-A Python TUI (Terminal User Interface) application that helps users research Polymarket polls and make informed predictions. The app displays top liquid polls (excluding sports), runs deep agentic research using Grok 4 (Web + X search) to find asymmetric information, evaluates if the odds justify taking a position, and tracks paper trading performance. Users bring their own xAI (Grok) API key.
+A Python command-based application that helps users research Polymarket polls and make informed predictions. The app fetches polls filtered by time-to-expiry, runs deep agentic research using Grok 4 (Web + X search) to find asymmetric information, evaluates if the odds justify taking a position, and tracks paper trading performance. Users bring their own xAI (Grok) API key.
 
 **📁 Documentation**: See `docs/` folder for implementation guides:
-- `textual-guide.md` - TUI framework patterns
 - `grok-agentic-guide.md` - Agentic research implementation  
 - `polymarket-client-guide.md` - Market data fetching
 
@@ -13,20 +12,21 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 **Phase 1 Goals**
 
-* Display top 20 most liquid Polymarket polls (excluding sports) in a clean TUI
+* Fetch polls filtered by time-to-expiry (7, 14, 30, 180 days)
 * Enable deep, multi-round agentic research to find asymmetric information
 * Show research progress (research can take 20-40 minutes)
 * Evaluate if current odds justify taking a position (accuracy over frequency)
 * Track paper trades with win rate, profit metrics, and projected APR
 * Hold positions until poll expiry (no early exits in Phase 1)
+* Filter research results by status (completed, pending, archived)
 
 **Non‑Goals (Phase 1)**
 
 * Real money execution/custody - paper trading only
 * Early position exits - hold until expiry
-* Sports betting markets - exclude all sports polls
 * Complex portfolio optimization
 * Multi‑exchange support
+* Mobile or web interface
 
 ## 3) Users & Use Cases
 
@@ -34,95 +34,103 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 **Top use cases**
 
-1. **Browse** top 20 liquid non-sports polls with current odds and time remaining
-2. **Research** selected poll using deep multi-round Grok agentic search (20-40 min)
+1. **Browse** polls by time-to-expiry using `/polls [days]` command
+2. **Research** selected poll using `/research <poll_id>` (20-40 min)
 3. **Evaluate** if research findings justify taking a position at current odds
 4. **Trade** paper positions held until poll expiry
-5. **Monitor** dashboard with win rate, profit metrics, and projected APR
+5. **Monitor** portfolio performance using `/portfolio` command
 
 ## 4) Application Flow
 
-**Launch**: User types `poly` to start the TUI application
+**Launch**: User types `polly` to start the application
 
-1. **Load Markets**: Fetch and display top 20 most liquid Polymarket polls (excluding sports)
-   - Show: poll question, options, current odds, time remaining, liquidity
+1. **Browse Polls**: Fetch polls by time-to-expiry
+   - Command: `/polls` or `/polls [days]`
+   - Options: 7, 14, 30, 180 days (optional)
+   - Display: poll ID, question, options, current odds, time remaining
    
-2. **Select Poll**: User selects a poll to research
-
-3. **Deep Research** (20-40 minutes):
-   - Run multiple rounds of Grok 4 agentic research (Web + X search)
-   - Goal: Find asymmetric information to accurately forecast outcome
-   - Show progress indicators during long-running research
-   - Iterate until confident understanding of all information intricacies
+2. **Research Poll**: Run deep research on selected poll
+   - Command: `/research <poll_id>`
+   - Duration: 20-40 minutes
+   - Process:
+     * Run multiple rounds of Grok 4 agentic research (Web + X search)
+     * Find asymmetric information to accurately forecast outcome
+     * Show progress indicators during research
+     * Iterate until confident understanding of all intricacies
    
-4. **Evaluate Position**:
+3. **Evaluate Position**:
    - Research produces: prediction, confidence level, rationale, citations
    - Algorithm evaluates: Do current odds justify taking a position?
    - Recommendation: Enter position or pass (prioritize accuracy over frequency)
    
-5. **Enter Trade** (if user accepts):
+4. **Enter Trade** (if user accepts):
    - Record paper trade (poll, side, odds, stake, timestamp)
    - Position held until poll expiry (no early exits)
    
-6. **Dashboard**: Display performance metrics
-   - Active positions count
-   - Win rate
-   - Total profit
-   - Average profit
-   - Projected annualized rate of return
+5. **View Research History**: Filter past research results
+   - Command: `/history [status]`
+   - Status filters: completed, pending, archived (optional)
+   - Display: Poll ID, recommended bet, odds, potential payout for $100 stake
+   
+6. **View Portfolio**: Trading performance metrics
+   - Command: `/portfolio`
+   - Display: active positions, win rate, total profit, average profit, projected APR
 
-## 5) TUI Experience (Textual Framework)
+## 5) Command Interface
 
-> **See**: `docs/textual-guide.md` for complete TUI implementation patterns, async workers, and widget examples
-
-**Launch**: `poly` command starts the TUI application
+**Launch**: `polly` command starts the application
 
 **Visual Style**:
-- Clean, modern interface using Textual components
-- Dark theme with clear typography
+- Clean ASCII banner on startup
+- Command-driven interface
+- Clear output formatting
 - Minimal clutter, focus on information density
-- Responsive layout optimized for terminal
 
-**Main Views**:
+**Available Commands**:
 
-1. **Polls List View** (Default):
-   - Top 20 most liquid non-sports polls
-   - Condensed format: Question | Options | Current Odds | Time Left | Liquidity
-   - Navigate with arrow keys, Enter to select
+1. **Browse Polls**:
+   - `/polls` - Show all available polls
+   - `/polls 7` - Polls ending in 7 days
+   - `/polls 14` - Polls ending in 14 days  
+   - `/polls 30` - Polls ending in 30 days
+   - `/polls 180` - Polls ending in 180 days
+   - Output: Poll ID, question, options, current odds, time remaining
 
-2. **Research View** (During research):
-   - Poll details at top
-   - Progress indicator showing research status (critical for 20-40 min process)
-   - Real-time updates: "Searching web...", "Analyzing X posts...", "Round 2/4..."
-   - Live research notes as they develop
+2. **Research Poll**:
+   - `/research <poll_id>` - Run deep research on specific poll
+   - Example: `/research 1`
+   - Shows progress during 20-40 minute research process
+   - Displays: recommendation, odds, potential payout for $100 stake
 
-3. **Decision View** (After research):
-   - Research summary with prediction & confidence
-   - Key findings and citations
-   - Current odds vs. recommended position
-   - Action: [Enter Trade] [Pass] [View Details]
+3. **Research History**:
+   - `/history` - Show all research
+   - `/history completed` - Research finished with recommendations
+   - `/history pending` - Research in progress or not started
+   - `/history archived` - Polls that have resolved
+   - Display: Poll ID, recommended bet, odds, potential payout for $100
 
-4. **Dashboard View**:
-   - Active Positions: count
-   - Win Rate: X/Y (Z%)
-   - Total Profit: $X
-   - Average Profit: $X per position
-   - Projected APR: X%
-   - Recent trades list
+4. **Portfolio Performance**:
+   - `/portfolio` - Show trading performance and metrics
+   - Display: active positions count, win rate, total profit, average profit, projected APR
+   - Lists active positions and recent resolved trades
 
-**Navigation**:
-- Tab/Shift+Tab: Switch between views
-- Arrow keys: Navigate lists
-- Enter: Select/Confirm
-- Esc: Go back
-- q: Quit application
+5. **Utility**:
+   - `/help` - Show all available commands
+   - `/exit` - Quit application
 
-## 6) Command
+## 6) Commands Summary
 
-**Single Command**: `poly`
-- Launches the full TUI application
-- No subcommands needed for Phase 1
-- All functionality accessible within TUI
+**Launch Command**: `polly`
+- Starts the command-based application
+- Shows ASCII banner with POLLY logo and getting started instructions
+
+**Core Commands**:
+- `/polls [days]` - Browse polls (optional filter: 7, 14, 30, 180 days)
+- `/research <poll_id>` - Run deep research on a poll
+- `/history [status]` - View research history (optional filter: completed, pending, archived)
+- `/portfolio` - View trading performance and metrics
+- `/help` - Show all available commands
+- `/exit` - Quit application
 
 ## 7) Functional Requirements
 
@@ -130,14 +138,18 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 > **See**: `docs/polymarket-client-guide.md` for complete implementation examples
 
-* Fetch active Polymarket polls with fields: `id, question, options[], current_odds{}, resolves_at, open_interest, volume_24h, category`
-* **Exclude**: All sports-related polls (filter by category)
-* **Select**: Top 20 by liquidity (open_interest + volume_24h combined metric)
-* **Display**: Condensed list showing:
-  - Poll question (truncated if long)
+* Fetch active Polymarket prediction market polls with fields: `id, question, options[], current_odds{}, resolves_at, open_interest, volume_24h, category`
+* **Filter by time-to-expiry**: 
+  - `/polls` - All active polls
+  - `/polls 7` - Polls ending in 7 days
+  - `/polls 14` - Polls ending in 14 days
+  - `/polls 30` - Polls ending in 30 days
+  - `/polls 180` - Polls ending in 180 days
+* **Display**: List showing:
+  - Poll ID (for research command)
+  - Poll question (prediction market)
   - Options with current odds
   - Time remaining until resolution
-  - Liquidity indicator (High/Med/Low badge)
 
 ### 7.2 Deep Agentic Research (Grok 4)
 
@@ -167,7 +179,7 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - MUST show live progress during research (critical for long duration)
 - Display current research round/activity
 - Show interim findings as they develop
-- Allow user to monitor without blocking TUI
+- Allow user to monitor without blocking command interface
 
 **Implementation**: Use Grok's streaming API with real-time tool call monitoring (see guide)
 
@@ -203,9 +215,7 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - ENTER: Option to bet on + suggested stake
 - PASS: Why the position isn't justified (weak edge, low confidence, etc.)
 
-### 7.4 Paper Trading
-
-> **See**: `docs/textual-guide.md` for async worker patterns to handle long-running operations without blocking UI
+### 7.4 Paper Trading & Research History
 
 **Phase 1 Constraints**:
 - Paper trading only (no real money)
@@ -233,13 +243,24 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 ```
 
 **User Decision Flow**:
-1. Review research findings and recommendation
-2. See: "Recommendation: BET on [Option X] at current odds of [Y]"
-3. Action: [Enter Trade with $100] or [Pass]
-4. If Enter: Record paper trade, add to active positions
+1. After research completes, display recommendation
+2. Show: "Recommendation: BET on [Option X] at current odds of [Y]" or "PASS - [reason]"
+3. If ENTER recommended, prompt: "Enter trade with $100 stake? (y/n)"
+4. If user confirms (y): Record paper trade, add to active positions
 5. Position held until poll resolves
 
-### 7.5 Dashboard & Performance Metrics
+**Research History Display**:
+- Filter options:
+  * `completed` - Research finished, recommendation available
+  * `pending` - Research in progress or not yet started
+  * `archived` - Poll has resolved
+- For each research result, display:
+  * Poll ID
+  * Recommended bet (option name or "PASS")
+  * Odds (if bet recommended)
+  * Potential payout if invested $100 (calculated from odds)
+
+### 7.5 Portfolio & Performance Metrics
 
 **Key Metrics**:
 1. **Active Positions**: Count of current open trades
@@ -254,17 +275,17 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - Profit = (stake * odds) - stake [if win], or -stake [if loss]
 - APR = (total_profit / total_staked) * (365 / avg_days_held) * 100
 
-**Display**:
-- Show metrics prominently in dashboard view
-- List active positions with: poll question, our bet, odds, days left
-- List recent resolved trades with: outcome, profit/loss, duration
+**Display** (via `/portfolio` command):
+- Show metrics at top
+- List active positions: poll question, our bet, odds, days left
+- List recent resolved trades: outcome, profit/loss, duration
 
 ## 8) Non‑Functional Requirements
 
 * **Performance**: 
   - Polls list loads in < 3 seconds
   - Research runs 20-40 minutes (acceptable, must show progress)
-  - TUI remains responsive during long operations
+  - Application remains responsive during long operations
   
 * **Resilience**: 
   - Handle API errors gracefully with retries
@@ -274,7 +295,7 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 * **UX**:
   - Live progress indicators for long operations
   - Clear, readable output (no terminal clutter)
-  - Smooth navigation between views
+  - Intuitive command syntax with helpful error messages
   
 * **Security**: 
   - Load xAI API key from environment variable
@@ -290,7 +311,6 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 
 **Core**:
 - Python 3.11+
-- Textual 0.40+ (TUI framework from textualize.io) - See `docs/textual-guide.md`
 - py-clob-client (Polymarket API) - See `docs/polymarket-client-guide.md`
 - pydantic (data validation)
 - SQLModel + SQLite (persistence)
@@ -304,9 +324,9 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 - tenacity (retries)
 - asyncio (async operations)
 - python-dotenv (environment vars)
+- rich (terminal formatting and output)
 
 **📚 Implementation Guides**:
-- `docs/textual-guide.md` - Complete TUI framework guide with async workers, widgets, and layouts
 - `docs/grok-agentic-guide.md` - Agentic research with streaming, multi-round patterns, citations
 - `docs/polymarket-client-guide.md` - Fetch and filter markets, read-only mode for Phase 1
 
@@ -315,9 +335,8 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 ## 10) Data Sources
 
 * **Polymarket API**: 
-  - Fetch active polls with metadata
-  - Filter by category (exclude sports)
-  - Sort by liquidity metrics
+  - Fetch active polls with metadata (question, options, odds, resolution date, liquidity)
+  - Filter by time-to-expiry (7, 14, 30, 180 days)
   - Get current odds in real-time
   
 * **xAI Grok API**:
@@ -347,13 +366,14 @@ A Python TUI (Terminal User Interface) application that helps users research Pol
 {
   id: int,
   poll_id: str,
-  prediction: str,  # which option
+  prediction: str,  # which option (or "PASS")
   probability: float,  # 0-1
   confidence: float,  # 0-100
   rationale: str,
   key_findings: list[str],
   citations: list[str],
   rounds_completed: int,
+  status: "pending" | "completed" | "archived",
   created_at: datetime,
   duration_minutes: int
 }
@@ -421,26 +441,27 @@ Continue researching until you have high confidence OR hit diminishing returns.
 > **Implementation Reference**: All features have corresponding examples in `docs/` guides
 
 **IN SCOPE**:
-- ✅ TUI app launched with `poly` command (see `docs/textual-guide.md`)
-- ✅ Display top 20 liquid non-sports polls (see `docs/polymarket-client-guide.md`)
-- ✅ User selects poll to research (ListView widget examples in textual guide)
-- ✅ Deep multi-round Grok research (see `docs/grok-agentic-guide.md`)
-- ✅ Live progress indicators during research (async workers in textual guide)
+- ✅ Command-based app launched with `polly` command
+- ✅ `/polls [days]` - Browse Polymarket prediction polls filtered by time-to-expiry (see `docs/polymarket-client-guide.md`)
+- ✅ `/research <poll_id>` - Deep multi-round Grok research to find information asymmetries (see `docs/grok-agentic-guide.md`)
+- ✅ `/history [status]` - View research history with filtering (completed, pending, archived)
+- ✅ `/portfolio` - View trading performance metrics (win rate, profit, APR)
+- ✅ Live progress indicators during research
 - ✅ Position evaluation algorithm (accuracy > frequency)
-- ✅ Paper trading with fixed stakes
-- ✅ Hold positions until expiry
-- ✅ Dashboard with win rate, profit, APR metrics
+- ✅ Paper trading with fixed $100 stakes
+- ✅ Hold positions until poll expiry
+- ✅ Display potential payout for $100 stake
 - ✅ SQLite persistence
 
 **OUT OF SCOPE** (Future Phases):
 - ❌ Real money execution
 - ❌ Early position exits
-- ❌ Sports betting
 - ❌ Portfolio optimization
 - ❌ Multiple exchanges
 - ❌ Advanced risk management
 - ❌ User authentication
 - ❌ Mobile/web interface
+- ❌ Automated trading/position management
 
 ## 14) Configuration
 
@@ -449,7 +470,7 @@ Continue researching until you have high confidence OR hit diminishing returns.
 XAI_API_KEY=your_xai_api_key_here
 ```
 
-**App Configuration** (`~/.poly/config.yml`):
+**App Configuration** (`~/.polly/config.yml`):
 ```yaml
 # Phase 1 Settings
 paper_trading:
@@ -460,14 +481,12 @@ research:
   min_edge_threshold: 0.10      # 10%
   
 polls:
-  top_n: 20                     # Show top 20 liquid polls
-  exclude_categories:           # Exclude sports
-    - sports
-    - esports
-  liquidity_weight:             # Sort by liquidity
-    open_interest: 0.7
-    volume_24h: 0.3
+  time_filters:                 # Available time-to-expiry filters (in days)
+    - 7
+    - 14
+    - 30
+    - 180
 
 database:
-  path: ~/.poly/trades.db       # SQLite database
+  path: ~/.polly/trades.db      # SQLite database
 ```

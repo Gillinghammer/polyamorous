@@ -1,87 +1,118 @@
+"""Domain models for the Polly application."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Literal
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 
-Recommendation = Literal["enter", "pass"]
-CitationKind = Literal["web", "x"]
-TradeSide = Literal["buy", "sell"]
-TradeStatus = Literal["open", "closed"]
-TradeMode = Literal["paper", "real"]
+@dataclass(slots=True)
+class MarketOutcome:
+    """Represents a tradeable outcome within a market."""
+
+    token_id: str
+    outcome: str
+    price: float
+    winner: bool | None = None
 
 
-@dataclass
-class Poll:
-    poll_id: str
+@dataclass(slots=True)
+class Market:
+    """Polymarket market metadata used by the UI."""
+
+    id: str
     question: str
-    url: str
-    category: Optional[str]
-    end_time: int
-    status: Optional[str]
-    archived: int = 0
+    description: str
+    category: str
+    liquidity: float
+    volume_24h: float
+    end_date: datetime
+    outcomes: List[MarketOutcome]
+    tags: List[str] = field(default_factory=list)
+
+    @property
+    def time_remaining(self) -> timedelta:
+        """Return the remaining time until resolution."""
+
+        return max(self.end_date - datetime.now(tz=self.end_date.tzinfo), timedelta())
+
+    def formatted_odds(self) -> Dict[str, float]:
+        """Return a mapping of outcome label to current price."""
+
+        return {outcome.outcome: outcome.price for outcome in self.outcomes}
 
 
-@dataclass
-class Outcome:
-    outcome_id: str
-    poll_id: str
-    name: str
-    price: Optional[float]
-    last_price_at: Optional[int]
-    price_source: Optional[str]
+@dataclass(slots=True)
+class ResearchProgress:
+    """Represents incremental progress during a research run."""
+
+    message: str
+    round_number: int
+    total_rounds: int
+    completed: bool = False
 
 
-@dataclass
-class Research:
-    id: str
-    poll_id: str
-    started_at: Optional[int]
-    completed_at: Optional[int]
-    recommendation: Optional[Recommendation]
-    confidence: Optional[float]
-    position_size_pct: Optional[float]
-    rationale: Optional[str]
-    provider: Optional[str]
-    meta_json: Optional[str]
+@dataclass(slots=True)
+class ResearchResult:
+    """Final research artefact returned by the Grok workflow."""
+
+    market_id: str
+    prediction: str
+    probability: float
+    confidence: float
+    rationale: str
+    key_findings: List[str]
+    citations: List[str]
+    rounds_completed: int
+    created_at: datetime
+    duration_minutes: int
+    # Usage and cost estimation
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
-@dataclass
-class Citation:
-    id: str
-    research_id: str
-    kind: CitationKind
-    title: Optional[str]
-    url: str
-    snippet: Optional[str]
-    source: Optional[str]
-    published_at: Optional[int]
-
-
-@dataclass
+@dataclass(slots=True)
 class Trade:
-    id: str
-    poll_id: str
-    research_id: Optional[str]
-    outcome_id: str
-    side: TradeSide
-    size_usdc: float
-    quantity: float
-    entry_price: float
-    entry_time: int
-    exit_price: Optional[float]
-    exit_time: Optional[int]
-    status: TradeStatus
-    mode: TradeMode
-    provider: Optional[str]
-    provider_order_id: Optional[str]
-    fee: Optional[float]
+    """Paper trade stored in SQLite."""
+
+    id: int | None
+    market_id: str
+    question: str
+    category: str | None
+    selected_option: str
+    entry_odds: float
+    stake_amount: float
+    entry_timestamp: datetime
+    predicted_probability: float
+    confidence: float
+    research_id: int | None
+    status: str
+    resolves_at: datetime
+    actual_outcome: Optional[str]
+    profit_loss: Optional[float]
+    closed_at: Optional[datetime]
 
 
-@dataclass
-class AgentDecisions:
-    processed: int
-    entered: int
-    skipped: int
+@dataclass(slots=True)
+class PortfolioMetrics:
+    """Aggregated dashboard metrics."""
 
+    active_positions: int
+    win_rate: float
+    total_profit: float
+    average_profit: float
+    projected_apr: float
+    recent_trades: List[Trade]
+    # Aggregate research spend for the session/app lifetime (not persisted yet)
+    research_spend_usd: float = 0.0
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    best_category: Optional[str] = None
+    worst_category: Optional[str] = None
+    profit_by_category: Dict[str, float] = field(default_factory=dict)
+    cash_available: float = 0.0
+    cash_in_play: float = 0.0
 

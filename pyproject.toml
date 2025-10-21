@@ -1,21 +1,23 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "polyamorous"
+name = "polly"
 version = "0.1.0"
-description = "TUI for Polymarket research & paper trading"
-readme = "prd.md"
+description = "Command-Based Polymarket Research & Paper Trading"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "textual>=0.40.0",
+    "rich>=13.0.0",
     "py-clob-client>=0.20.0",
+    "requests>=2.32.0",
     "xai-sdk>=0.1.0",
     "pydantic>=2.0.0",
     "PyYAML>=6.0",
     "tenacity>=8.2.0",
     "python-dotenv>=1.0.0",
+    "prompt-toolkit>=3.0.0",
 ]
 
 [project.scripts]
@@ -23,5 +25,4 @@ polly = "polly.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["polly*", "poly_legacy*"]
-
+include = ["polly*"]

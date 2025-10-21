@@ -1,9 +1,7 @@
-"""Module entry point for `python -m polly`."""
+"""Entry point for Polly CLI when run as a module."""
 
-from .cli import main
-
+from polly.cli import main
 
 if __name__ == "__main__":
     main()
-
 

@@ -1,5 +1,5 @@
-# Core TUI framework
-textual>=0.40.0
+# Terminal formatting
+rich>=13.0.0
 
 # Polymarket API client
 py-clob-client>=0.20.0
@@ -17,4 +17,5 @@ PyYAML>=6.0
 # Utilities
 tenacity>=8.2.0
 python-dotenv>=1.0.0
+prompt-toolkit>=3.0.0
 

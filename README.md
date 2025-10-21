@@ -1,169 +1,303 @@
-# Poly - TUI Polymarket Research & Paper Trading
+# Polly - Polymarket Research & Paper Trading
 
-A Python TUI (Terminal User Interface) application for researching Polymarket polls and making informed predictions with paper trading.
+A command-based application for researching Polymarket prediction markets using deep AI analysis (Grok 4) and tracking paper trades.
 
-## Quick Start
+## Features
 
-### Installation
+- **Browse Polls**: Fetch and filter Polymarket markets by time-to-expiry
+- **Deep Research**: Run multi-round AI research (20-40 min) using Grok 4 with Web + X search
+- **Position Evaluation**: Algorithmic evaluation of whether current odds justify taking a position
+- **Paper Trading**: Track hypothetical trades with performance metrics
+- **Research History**: View past research and recommendations
+- **Portfolio Analytics**: Win rate, profit metrics, and projected APR
 
+## Installation
+
+### Prerequisites
+
+- Python 3.11+
+- xAI API Key (get from [console.x.ai](https://console.x.ai/))
+
+### Setup
+
+1. Clone this repository:
+```bash
+git clone <repository-url>
+cd polyamorous
+```
+
+2. Install the package:
 ```bash
 pip install -e .
 ```
 
-### Configuration (Required)
-
-Set your xAI API key for Grok research:
-
+3. Set your xAI API key:
 ```bash
-export XAI_API_KEY="your_xai_api_key_here"
+export XAI_API_KEY='your_api_key_here'
 ```
 
-### Initialize and Ingest
-
+Or create a `.env` file:
 ```bash
-python -m polly init --starting-balance 10000
-python -m polly ingest --open-only
+echo "XAI_API_KEY=your_api_key_here" > .env
 ```
 
-### Run
+## Usage
+
+### Launch Polly
 
 ```bash
-python -m polly run
+polly
 ```
 
-### Agent Settings
-
+Or run as a module:
 ```bash
-# View settings
-python -m polly settings
-# Enable agent and set window days
-python -m polly settings --agent-enabled 1 --agent-window-days 3
-# Run agent once (idempotent)
-python -m polly agent-run
+python -m polly
 ```
 
-### Resolve Closed Markets
+### Available Commands
 
+Once launched, use these commands:
+
+#### Browse Polls
 ```bash
-python -m polly resolve
+polly> /polls              # Show all polls (sorted by expiry date)
+polly> /polls 7            # Polls ending in 7 days
+polly> /polls politics     # Polls in "politics" category
+polly> /polls bitcoin      # Polls mentioning "bitcoin"
+polly> /polls 7 bitcoin    # Polls ending in 7 days mentioning "bitcoin"
+polly> /polls 14 trump     # Polls ending in 14 days mentioning "trump"
 ```
 
-## Notes
+Search terms match against poll question, category, description, and tags (case-insensitive).
 
-- Uses official Polymarket REST for market data
-- Paper trading only; gateway designed for future real trading
-- SQLite DB path: `~/.config/polly/polly.db`
+#### Research a Poll
+```bash
+polly> /research <poll_id>  # Run deep research (20-40 minutes)
+```
 
-## Features
+Example:
+```bash
+polly> /polls 7            # See available polls
+polly> /research 1         # Research poll #1 from the list
+```
 
-- ✅ Display top 20 most liquid Polymarket polls (excluding sports)
-- ✅ Deep multi-round agentic research using Grok 4 (Web + X search)
-- ✅ Live progress indicators during research (20-40 minutes)
-- ✅ Position evaluation algorithm (accuracy over frequency)
-- ✅ Paper trading with fixed stakes
-- ✅ Dashboard with win rate, profit, and projected APR metrics
-- ✅ SQLite persistence for trades
+#### View Research History
+```bash
+polly> /history              # Show all research
+polly> /history completed    # Research with recommendations
+polly> /history pending      # Research not yet completed
+polly> /history archived     # Polls that have resolved
+```
 
-## Navigation
+#### View Portfolio
+```bash
+polly> /portfolio           # Show performance metrics and active positions
+```
 
-- `Tab`/`Shift+Tab`: Switch between views
-- `Arrow keys`: Navigate lists
-- `Enter`: Select/Confirm
-- `Esc`: Go back
-- `q`: Quit application
-- `r`: Refresh markets
+#### Help
+```bash
+polly> /help               # Show command reference
+```
 
-## Views
+#### Exit
+```bash
+polly> /exit               # Quit Polly
+```
 
-1. **Polls** - Browse top liquid non-sports polls
-2. **Research** - View research progress and findings
-3. **Decision** - Review recommendations and enter/pass trades
-4. **Dashboard** - Track performance metrics
+## Command History
+
+Polly includes advanced command history features powered by `prompt_toolkit`:
+
+### Navigation
+- **Up/Down Arrows**: Cycle through previous commands
+- **Ctrl+R**: Reverse search through history
+- **Prefix Search**: Type part of a command (e.g., `/p`) then press Up to find the last command starting with `/p`
+
+### Examples
+```bash
+polly> /polls bitcoin    # Run command
+polly> /portfolio        # Run another command
+polly> /p                # Type /p
+# Press Up → shows "/polls bitcoin" (last command starting with /p)
+# Press Up again → shows any other commands starting with /p
+```
+
+### History Storage
+- Saved to `~/.polly/history.txt`
+- Persists across sessions
+- Unlimited history entries
 
 ## Configuration
 
-Default config location: `~/.poly/config.yml`
+Polly creates a config file at `~/.polly/config.yml` on first run. Customize settings:
 
 ```yaml
-# App Configuration (~/.poly/config.yml)
-paper_trading:
-  default_stake: 100
-
 research:
-  # Thresholds
-  min_confidence_threshold: 70     # 0-100
-  min_edge_threshold: 0.10         # 10%
-  # Depth & model
-  model_name: grok-4-fast
-  default_rounds: 20               # deep research (20–40 minutes)
-  # Tools
-  enable_code_execution: true      # use for quantitative checks
-  enable_image_understanding: true
-  enable_video_understanding: true
-  # Cost estimation (USD per 1K tokens)
-  prompt_token_price_per_1k: 0.0
-  completion_token_price_per_1k: 0.0
-  reasoning_token_price_per_1k: 0.0
+  min_confidence_threshold: 70    # Minimum confidence to recommend entry (0-100)
+  min_edge_threshold: 0.10        # Minimum edge over market odds (10%)
+  model_name: "grok-4-fast"       # Grok model to use
+  default_rounds: 20              # Number of research rounds
+
+paper_trading:
+  default_stake: 100              # Fixed stake per trade ($)
+  starting_cash: 10000            # Initial paper trading balance ($)
 
 polls:
-  top_n: 20
-  exclude_categories:
+  top_n: 20                       # Number of polls to display
+  exclude_categories:             # Categories to filter out
     - sports
     - esports
-  liquidity_weight:
-    open_interest: 0.7
-    volume_24h: 0.3
 
 database:
-  path: ~/.poly/trades.db
+  path: ~/.polly/trades.db        # SQLite database location
 ```
 
-## Tech Stack
+## How It Works
 
-- **Python 3.11+**
-- **Textual 0.40+** - TUI framework
-- **py-clob-client** - Polymarket API
-- **xai-sdk** - Grok 4 research
-- **SQLite** - Data persistence
+### Research Flow
 
-## Development
+1. **Meta Planning**: Grok identifies key topics/questions to research
+2. **Multi-Round Research**: Uses Web Search and X Search to gather information
+3. **Synthesis**: Converts findings into probability estimates
+4. **Evaluation**: Compares predicted odds vs market odds to calculate edge
+5. **Recommendation**: Enter position if confidence and edge thresholds met
 
-### Testing
+### Position Evaluation Algorithm
+
+```python
+# Calculate expected value
+EV = (predicted_prob * payout) - (1 - predicted_prob) * stake
+
+# Calculate edge vs market
+edge = predicted_prob - implied_prob_from_odds
+
+# Adjust for confidence
+adjusted_edge = edge * (confidence / 100)
+
+# Recommend ENTER if:
+# - adjusted_edge > min_threshold (e.g., 10%)
+# - confidence > min_confidence (e.g., 70%)
+# - EV > 0
+```
+
+### Paper Trading
+
+- Fixed stake per trade (default: $100)
+- Positions held until poll expiry (no early exits in Phase 1)
+- Automatic P&L calculation on resolution
+- Performance tracking: win rate, total profit, projected APR
+
+## Example Session
 
 ```bash
-# Verify Python syntax
-python -m compileall poly
+$ polly
 
-# Run the app
-python -m poly
+╔═══════════════════════════════════════════════╗
+║   ██████╗  ██████╗ ██╗     ██╗  ██╗   ██╗    ║
+║   ██╔══██╗██╔═══██╗██║     ██║  ╚██╗ ██╔╝    ║
+║   ██████╔╝██║   ██║██║     ██║   ╚████╔╝     ║
+║   ██╔═══╝ ██║   ██║██║     ██║    ╚██╔╝      ║
+║   ██║     ╚██████╔╝███████╗███████╗██║       ║
+║   ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝       ║
+║                                               ║
+║   Polymarket Research & Paper Trading         ║
+╚═══════════════════════════════════════════════╝
+
+Welcome! Type /help to see available commands.
+
+polly> /polls 7
+Fetching markets from Polymarket...
+
+┏━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┓
+║ ID ║ Question                  ║ Odds          ║ Expires  ║ Liquidity ║
+┡━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━┩
+│ 1  │ Will Senate pass bill?    │ Yes: 58%...   │ 6d 14h   │ $1,250... │
+└────┴───────────────────────────┴───────────────┴──────────┴───────────┘
+
+polly> /research 1
+Researching: Will Senate pass bill?
+Starting deep research... This may take 20-40 minutes.
+
+[Research progress updates...]
+
+✓ Research completed!
+
+[Research results panel with prediction, confidence, rationale...]
+
+RECOMMENDATION: ENTER
+Bet on: Yes at 58%
+Potential payout for $100: $172.41 (+72%)
+
+Enter trade with $100 stake? (y/n): y
+
+✓ Trade recorded! Position ID: 1
+```
+
+## Project Structure
+
+```
+polly/
+├── __init__.py
+├── __main__.py          # Entry point
+├── cli.py               # Command loop and routing
+├── config.py            # Configuration management
+├── models.py            # Data models
+├── commands/            # Command handlers
+│   ├── polls.py
+│   ├── research.py
+│   ├── history.py
+│   ├── portfolio.py
+│   └── help.py
+├── services/            # Business logic
+│   ├── polymarket.py    # Market data fetching
+│   ├── research.py      # Grok research orchestration
+│   └── evaluator.py     # Position evaluation
+├── storage/             # Data persistence
+│   ├── trades.py        # Trade repository (SQLite)
+│   └── research.py      # Research repository (SQLite)
+└── ui/                  # Terminal formatting
+    ├── banner.py        # ASCII art
+    └── formatters.py    # Rich formatting helpers
 ```
 
 ## Documentation
 
-- [`prd.md`](prd.md) - Complete product requirements
-- [`AGENTS.md`](AGENTS.md) - Agent guidelines for contributors
-- [`docs/textual-guide.md`](docs/textual-guide.md) - TUI framework patterns
-- [`docs/grok-agentic-guide.md`](docs/grok-agentic-guide.md) - Agentic research implementation
-- [`docs/polymarket-client-guide.md`](docs/polymarket-client-guide.md) - Market data fetching
+See the `docs/` folder for detailed implementation guides:
+- `grok-agentic-guide.md` - Agentic research patterns
+- `polymarket-client-guide.md` - Market data fetching
 
-## Phase 1 Scope
+## Troubleshooting
 
-**IN SCOPE**:
+### API Key Not Found
+```
+Error: XAI_API_KEY environment variable not set.
+```
+**Solution**: Set your xAI API key in `.env` or export as environment variable.
+
+### Import Errors
+```
+ModuleNotFoundError: No module named 'polly'
+```
+**Solution**: Install the package with `pip install -e .`
+
+### Database Locked
+```
+Error: database is locked
+```
+**Solution**: Ensure no other Polly instances are running. If persists, remove `~/.polly/trades.db` (will lose trade history).
+
+## Phase 1 Limitations
+
 - Paper trading only (no real money)
-- Hold positions until poll expiry
-- Top 20 liquid non-sports polls
-- Deep multi-round Grok research
-- Dashboard metrics
+- Positions held until expiry (no early exits)
+- Fixed stake per trade
+- No portfolio optimization
+- Command-line interface only
 
-**OUT OF SCOPE**:
-- Real money execution
-- Early position exits
-- Sports betting
-- Portfolio optimization
-- Multi-exchange support
+## Contributing
 
----
+This is a personal project. See `prd.md` for product requirements and roadmap.
 
-Built with ❤️ for prediction market traders seeking asymmetric information advantages.
+## License
 
-
+See LICENSE file.
