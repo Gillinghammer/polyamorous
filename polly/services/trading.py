@@ -296,53 +296,72 @@ class TradingService:
             BUY = getattr(constants, "BUY")
             FOK = getattr(OrderType, "FOK")
 
-            # Fetch orderbook to check spread and get price
-            print(f"[DEBUG] Fetching orderbook for token_id: {token_id}")
-            print(f"[DEBUG] Token ID (truncated): {token_id[:20]}...")
+            # Get actual market prices using price API (more reliable than orderbook parsing)
+            print(f"[DEBUG] Fetching market prices for token_id: {token_id[:20]}...")
             
-            orderbook = self._client.get_order_book(token_id)
-            
-            # Verify orderbook is for correct token
-            if hasattr(orderbook, 'asset_id'):
-                print(f"[DEBUG] Orderbook asset_id: {orderbook.asset_id}")
-                if str(orderbook.asset_id) != str(token_id):
-                    print(f"[ERROR] Token ID mismatch! Requested {token_id[:20]}... but got {str(orderbook.asset_id)[:20]}...")
-            
-            best_ask = self._get_best_ask(orderbook)
-            best_bid = self._get_best_bid(orderbook)
-
-            if best_ask is None:
-                return TradeExecutionResult(
-                    success=False,
-                    order_id=None,
-                    error=f"No liquidity available (no asks in orderbook)",
-                    executed_price=0.0,
-                    executed_size=0.0,
-                )
-
-            # Calculate and warn about spread
-            if best_bid and best_ask:
-                spread = best_ask - best_bid
-                spread_pct = (spread / best_ask) * 100 if best_ask > 0 else 0
+            try:
+                # Get buy and sell prices
+                buy_price_data = self._client.get_price(token_id, side="BUY")
+                sell_price_data = self._client.get_price(token_id, side="SELL")
                 
-                print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
-                print(f"[DEBUG]   Best bid: ${best_bid:.4f} | Best ask: ${best_ask:.4f}")
+                buy_price = float(buy_price_data.get("price", 0)) if isinstance(buy_price_data, dict) else 0
+                sell_price = float(sell_price_data.get("price", 0)) if isinstance(sell_price_data, dict) else 0
                 
-                # Warn if spread is unusually wide (>10%)
-                if spread_pct > 10.0:
-                    print(f"[WARNING] ⚠️  WIDE SPREAD: {spread_pct:.1f}%")
-                    print(f"[WARNING] Low liquidity market - execution price may vary significantly!")
+                print(f"[DEBUG] Market prices: BUY @ ${buy_price:.4f} | SELL @ ${sell_price:.4f}")
+                
+                if buy_price == 0:
+                    return TradeExecutionResult(
+                        success=False,
+                        order_id=None,
+                        error=f"No market price available for this token",
+                        executed_price=0.0,
+                        executed_size=0.0,
+                    )
+                
+                # Calculate and warn about spread
+                if buy_price > 0 and sell_price > 0:
+                    spread = buy_price - sell_price
+                    spread_pct = (spread / buy_price) * 100 if buy_price > 0 else 0
+                    
+                    print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
+                    
+                    # Warn if spread is unusually wide (>10%)
+                    if spread_pct > 10.0:
+                        print(f"[WARNING] ⚠️  WIDE SPREAD: {spread_pct:.1f}%")
+                        print(f"[WARNING] Low liquidity market - execution price may vary!")
+                
+                # Use buy_price for share calculation
+                market_price = buy_price
+                
+            except Exception as price_error:
+                print(f"[DEBUG] Could not fetch market price: {price_error}")
+                print(f"[DEBUG] Falling back to orderbook parsing...")
+                
+                # Fallback to orderbook if get_price fails
+                orderbook = self._client.get_order_book(token_id)
+                best_ask = self._get_best_ask(orderbook)
+                
+                if best_ask is None:
+                    return TradeExecutionResult(
+                        success=False,
+                        order_id=None,
+                        error=f"No liquidity available",
+                        executed_price=0.0,
+                        executed_size=0.0,
+                    )
+                
+                market_price = best_ask
 
             # Ensure stake meets Polymarket's $1 minimum
             if stake_amount < 1.0:
                 print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
-            # Calculate shares to buy with the stake amount
+            # Calculate shares to buy with the stake amount using ACTUAL market price
             # For BUY: amount parameter is NUMBER OF SHARES, not dollars!
-            shares_to_buy = stake_amount / best_ask
+            shares_to_buy = stake_amount / market_price
             
-            print(f"[DEBUG] Calculated: ${stake_amount:.2f} @ ${best_ask:.4f} = {shares_to_buy:.4f} shares")
+            print(f"[DEBUG] Calculated: ${stake_amount:.2f} @ ${market_price:.4f} = {shares_to_buy:.4f} shares")
             print(f"[DEBUG] Creating MARKET BUY order for {shares_to_buy:.4f} shares...")
             
             # Use MarketOrderArgs with SHARES as amount
