@@ -305,6 +305,7 @@ class TradingService:
             print(f"[DEBUG] Orderbook keys: {orderbook.keys() if isinstance(orderbook, dict) else 'not a dict'}")
             
             best_ask = self._get_best_ask(orderbook)
+            best_bid = self._get_best_bid(orderbook)
 
             if best_ask is None:
                 # Debug: check what we got back
@@ -322,6 +323,19 @@ class TradingService:
                     executed_price=0.0,
                     executed_size=0.0,
                 )
+
+            # Calculate and warn about spread
+            if best_bid and best_ask:
+                spread = best_ask - best_bid
+                spread_pct = (spread / best_ask) * 100 if best_ask > 0 else 0
+                
+                print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
+                print(f"[DEBUG]   Best bid: ${best_bid:.4f} | Best ask: ${best_ask:.4f}")
+                
+                # Warn if spread is unusually wide (>5%)
+                if spread_pct > 5.0:
+                    print(f"[WARNING] Wide spread detected: {spread_pct:.1f}% - low liquidity market!")
+                    print(f"[WARNING] You may get filled at significantly different prices")
 
             # Calculate shares based on actual orderbook price with 2% slippage
             price = min(best_ask * 1.02, 0.99)
