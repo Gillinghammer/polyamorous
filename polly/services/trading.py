@@ -419,16 +419,19 @@ class TradingService:
                 error = resp.get("error")
                 
                 # Get actual execution amounts
-                taking_amount = resp.get("takingAmount")  # USDC spent
-                making_amount = resp.get("makingAmount")  # Shares received
+                # For BUY orders:
+                # - makingAmount = USDC you're paying (what you make/offer)
+                # - takingAmount = Shares you're receiving (what you take/get)
+                making_amount = resp.get("makingAmount")  # USDC spent
+                taking_amount = resp.get("takingAmount")  # Shares received
                 
                 actual_price = 0.0
                 actual_size = 0.0
                 
                 if taking_amount and making_amount:
                     try:
-                        actual_spent = float(taking_amount)
-                        actual_shares = float(making_amount)
+                        actual_spent = float(making_amount)  # USDC paid
+                        actual_shares = float(taking_amount)  # Shares received
                         if actual_shares > 0:
                             actual_price = actual_spent / actual_shares
                             actual_size = actual_shares
@@ -879,16 +882,19 @@ class TradingService:
                 error = resp.get("error")
                 
                 # Get actual execution amounts
-                taking_amount = resp.get("takingAmount")  # Shares sold
-                making_amount = resp.get("makingAmount")  # USDC received
+                # For SELL orders:
+                # - makingAmount = Shares you're selling (what you make/offer)
+                # - takingAmount = USDC you're receiving (what you take/get)
+                making_amount = resp.get("makingAmount")  # Shares sold
+                taking_amount = resp.get("takingAmount")  # USDC received
                 
                 actual_price = 0.0
                 actual_size = 0.0
                 
                 if taking_amount and making_amount:
                     try:
-                        actual_shares = float(taking_amount)
-                        actual_received = float(making_amount)
+                        actual_shares = float(making_amount)  # Shares sold
+                        actual_received = float(taking_amount)  # USDC received
                         if actual_shares > 0:
                             actual_price = actual_received / actual_shares
                             actual_size = actual_shares
