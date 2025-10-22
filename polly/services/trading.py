@@ -297,8 +297,16 @@ class TradingService:
             FOK = getattr(OrderType, "FOK")
 
             # Fetch orderbook to check spread and get price
-            print(f"[DEBUG] Fetching orderbook for pricing...")
+            print(f"[DEBUG] Fetching orderbook for token_id: {token_id}")
+            print(f"[DEBUG] Token ID (truncated): {token_id[:20]}...")
+            
             orderbook = self._client.get_order_book(token_id)
+            
+            # Verify orderbook is for correct token
+            if hasattr(orderbook, 'asset_id'):
+                print(f"[DEBUG] Orderbook asset_id: {orderbook.asset_id}")
+                if str(orderbook.asset_id) != str(token_id):
+                    print(f"[ERROR] Token ID mismatch! Requested {token_id[:20]}... but got {str(orderbook.asset_id)[:20]}...")
             
             best_ask = self._get_best_ask(orderbook)
             best_bid = self._get_best_bid(orderbook)
@@ -330,15 +338,19 @@ class TradingService:
                 print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
-            print(f"[DEBUG] Creating MARKET BUY order for ${stake_amount:.2f}...")
-            print(f"[DEBUG] Expected to buy ~{stake_amount/best_ask:.2f} shares at market price")
+            # Calculate shares to buy with the stake amount
+            # For BUY: amount parameter is NUMBER OF SHARES, not dollars!
+            shares_to_buy = stake_amount / best_ask
             
-            # Use MarketOrderArgs - amount should be dollar amount for BUY
+            print(f"[DEBUG] Calculated: ${stake_amount:.2f} @ ${best_ask:.4f} = {shares_to_buy:.4f} shares")
+            print(f"[DEBUG] Creating MARKET BUY order for {shares_to_buy:.4f} shares...")
+            
+            # Use MarketOrderArgs with SHARES as amount
             MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
             
             market_order = MarketOrderArgs(
                 token_id=token_id,
-                amount=stake_amount,  # Dollar amount to spend (per docs)
+                amount=shares_to_buy,  # NUMBER OF SHARES (not dollars!)
                 side=BUY,
                 order_type=FOK
             )
@@ -353,7 +365,7 @@ class TradingService:
             # Sign and post market order
             signed_order = self._client.create_market_order(market_order)
             
-            print(f"[DEBUG] Posting MARKET order (FOK) for ${stake_amount:.2f}...")
+            print(f"[DEBUG] Posting MARKET order (FOK) for {shares_to_buy:.4f} shares...")
             
             try:
                 resp = self._client.post_order(signed_order, FOK)
