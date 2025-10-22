@@ -296,18 +296,15 @@ class TradingService:
             BUY = getattr(constants, "BUY")
             FOK = getattr(OrderType, "FOK")
 
-            # Get actual market prices using price API (more reliable than orderbook parsing)
-            print(f"[DEBUG] Fetching market prices for token_id: {token_id[:20]}...")
+            # Get market price using price API (no orderbooks needed!)
+            print(f"[DEBUG] Fetching market price for token_id: {token_id[:20]}...")
             
             try:
-                # Get buy and sell prices
+                # Get buy price - this is what you'll pay
                 buy_price_data = self._client.get_price(token_id, side="BUY")
-                sell_price_data = self._client.get_price(token_id, side="SELL")
-                
                 buy_price = float(buy_price_data.get("price", 0)) if isinstance(buy_price_data, dict) else 0
-                sell_price = float(sell_price_data.get("price", 0)) if isinstance(sell_price_data, dict) else 0
                 
-                print(f"[DEBUG] Market prices: BUY @ ${buy_price:.4f} | SELL @ ${sell_price:.4f}")
+                print(f"[DEBUG] Current market BUY price: ${buy_price:.4f}")
                 
                 if buy_price == 0:
                     return TradeExecutionResult(
@@ -318,61 +315,49 @@ class TradingService:
                         executed_size=0.0,
                     )
                 
-                # Calculate and warn about spread
-                if buy_price > 0 and sell_price > 0:
-                    spread = buy_price - sell_price
-                    spread_pct = (spread / buy_price) * 100 if buy_price > 0 else 0
-                    
-                    print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
-                    
-                    # Warn if spread is unusually wide (>10%)
-                    if spread_pct > 10.0:
-                        print(f"[WARNING] ⚠️  WIDE SPREAD: {spread_pct:.1f}%")
-                        print(f"[WARNING] Low liquidity market - execution price may vary!")
-                
-                # Use buy_price for share calculation
-                market_price = buy_price
+                # Optional: Get sell price to show spread
+                try:
+                    sell_price_data = self._client.get_price(token_id, side="SELL")
+                    sell_price = float(sell_price_data.get("price", 0)) if isinstance(sell_price_data, dict) else 0
+                    if sell_price > 0:
+                        spread = buy_price - sell_price
+                        spread_pct = (spread / buy_price) * 100
+                        print(f"[DEBUG] Spread: ${spread:.4f} ({spread_pct:.1f}%)")
+                        if spread_pct > 10.0:
+                            print(f"[WARNING] Wide spread: {spread_pct:.1f}%")
+                except:
+                    pass
                 
             except Exception as price_error:
-                print(f"[DEBUG] Could not fetch market price: {price_error}")
-                print(f"[DEBUG] Falling back to orderbook parsing...")
-                
-                # Fallback to orderbook if get_price fails
-                orderbook = self._client.get_order_book(token_id)
-                best_ask = self._get_best_ask(orderbook)
-                
-                if best_ask is None:
-                    return TradeExecutionResult(
-                        success=False,
-                        order_id=None,
-                        error=f"No liquidity available",
-                        executed_price=0.0,
-                        executed_size=0.0,
-                    )
-                
-                market_price = best_ask
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"Could not fetch market price: {price_error}",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
 
             # Ensure stake meets Polymarket's $1 minimum
             if stake_amount < 1.0:
                 print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
-            # Calculate shares to buy with the stake amount using ACTUAL market price
-            # For BUY: amount parameter is NUMBER OF SHARES, not dollars!
-            shares_to_buy = stake_amount / market_price
+            # DON'T calculate shares - just pass dollar amount
+            # According to docs: For BUY side, amount should be dollar amount to spend
+            print(f"[DEBUG] Creating market order to spend ${stake_amount:.2f}")
+            print(f"[DEBUG] Expected to get ~{stake_amount/buy_price:.2f} shares at ${buy_price:.4f}/share")
             
-            print(f"[DEBUG] Calculated: ${stake_amount:.2f} @ ${market_price:.4f} = {shares_to_buy:.4f} shares")
-            print(f"[DEBUG] Creating MARKET BUY order for {shares_to_buy:.4f} shares...")
-            
-            # Use MarketOrderArgs with SHARES as amount
+            # Use MarketOrderArgs - pass DOLLAR amount for BUY
             MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
             
             market_order = MarketOrderArgs(
                 token_id=token_id,
-                amount=shares_to_buy,  # NUMBER OF SHARES (not dollars!)
+                amount=stake_amount,  # DOLLAR amount to spend (for BUY side per docs)
                 side=BUY,
                 order_type=FOK
             )
+            
+            print(f"[DEBUG] MarketOrderArgs created: amount={stake_amount} (dollars), side=BUY, type=FOK")
             
             # Refresh API credentials
             try:
