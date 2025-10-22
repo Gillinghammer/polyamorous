@@ -223,7 +223,18 @@ def handle_trade(
     )
 
     if result.success:
-        # Record trade in database
+        # Calculate actual cost
+        actual_cost = result.executed_price * result.executed_size
+        
+        # Warn if execution price differs significantly from expected
+        if abs(actual_cost - amount) > 0.50:  # More than 50¢ difference
+            console.print(f"\n[bold yellow]⚠️  PRICE WARNING[/bold yellow]")
+            console.print(f"[yellow]Expected to spend: ${amount:.2f}[/yellow]")
+            console.print(f"[yellow]Actually spent: ${actual_cost:.2f}[/yellow]")
+            console.print(f"[yellow]Difference: ${abs(actual_cost - amount):.2f}[/yellow]")
+            console.print(f"[dim]Market price may have moved during order execution[/dim]\n")
+        
+        # Record trade in database with ACTUAL execution values
         trade = Trade(
             id=None,
             market_id=market.id,
@@ -231,7 +242,7 @@ def handle_trade(
             category=market.category,
             selected_option=matching_outcome.outcome,
             entry_odds=result.executed_price,
-            stake_amount=amount,
+            stake_amount=actual_cost,  # Use actual amount spent
             entry_timestamp=datetime.now(tz=timezone.utc),
             predicted_probability=0.0,  # Manual trade, no prediction
             confidence=0.0,  # Manual trade, no confidence
@@ -248,8 +259,9 @@ def handle_trade(
 
         console.print("[green]✓ Trade executed successfully[/green]")
         console.print(f"[dim]Order ID: {result.order_id}[/dim]")
-        console.print(f"[dim]Executed Price: ${result.executed_price:.3f}[/dim]")
+        console.print(f"[dim]Executed Price: ${result.executed_price:.3f} per share[/dim]")
         console.print(f"[dim]Shares: {result.executed_size:.2f}[/dim]")
+        console.print(f"[dim]Total Cost: ${actual_cost:.2f}[/dim]")
     else:
         console.print(f"[red]✗ Trade failed: {result.error}[/red]")
 
