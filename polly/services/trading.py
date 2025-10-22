@@ -277,8 +277,8 @@ class TradingService:
     def execute_market_buy_with_amount(self, token_id: str, stake_amount: float) -> TradeExecutionResult:
         """Execute a market buy order with a specific stake amount.
         
-        This method fetches the current orderbook price and calculates the appropriate
-        number of shares to buy with the given stake amount.
+        Uses MarketOrderArgs to execute at current market price via FOK (Fill-Or-Kill).
+        This is simpler and more reliable than limit orders.
 
         Args:
             token_id: Token ID to purchase
@@ -292,37 +292,17 @@ class TradingService:
             clob_types = import_module("py_clob_client.clob_types")
             constants = import_module("py_clob_client.order_builder.constants")
 
-            OrderArgs = getattr(clob_types, "OrderArgs")
+            MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
             OrderType = getattr(clob_types, "OrderType")
             BUY = getattr(constants, "BUY")
+            FOK = getattr(OrderType, "FOK")
 
-            # Get current orderbook to determine market price
-            print(f"[DEBUG] Full token_id: {token_id}")
-            print(f"[DEBUG] Fetching orderbook for token_id: {token_id[:16]}...")
-            
+            # Fetch orderbook to check spread and warn user
+            print(f"[DEBUG] Checking orderbook for spread analysis...")
             orderbook = self._client.get_order_book(token_id)
-            print(f"[DEBUG] Orderbook response type: {type(orderbook)}")
-            print(f"[DEBUG] Orderbook keys: {orderbook.keys() if isinstance(orderbook, dict) else 'not a dict'}")
             
             best_ask = self._get_best_ask(orderbook)
             best_bid = self._get_best_bid(orderbook)
-
-            if best_ask is None:
-                # Debug: check what we got back
-                if hasattr(orderbook, 'asks'):
-                    asks_count = len(orderbook.asks) if orderbook.asks else 0
-                elif isinstance(orderbook, dict):
-                    asks_count = len(orderbook.get("asks", []))
-                else:
-                    asks_count = 0
-                
-                return TradeExecutionResult(
-                    success=False,
-                    order_id=None,
-                    error=f"No liquidity available (token_id: {token_id[:16]}..., asks: {asks_count})",
-                    executed_price=0.0,
-                    executed_size=0.0,
-                )
 
             # Calculate and warn about spread
             if best_bid and best_ask:
@@ -332,26 +312,120 @@ class TradingService:
                 print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
                 print(f"[DEBUG]   Best bid: ${best_bid:.4f} | Best ask: ${best_ask:.4f}")
                 
-                # Warn if spread is unusually wide (>5%)
-                if spread_pct > 5.0:
-                    print(f"[WARNING] Wide spread detected: {spread_pct:.1f}% - low liquidity market!")
-                    print(f"[WARNING] You may get filled at significantly different prices")
+                # Warn if spread is unusually wide (>10%)
+                if spread_pct > 10.0:
+                    print(f"[WARNING] ⚠️  WIDE SPREAD: {spread_pct:.1f}%")
+                    print(f"[WARNING] Low liquidity market - execution price may vary significantly!")
 
-            # Calculate shares based on actual orderbook price with 2% slippage
-            price = min(best_ask * 1.02, 0.99)
-            
             # Ensure stake meets Polymarket's $1 minimum
             if stake_amount < 1.0:
                 print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
-            # Calculate shares - add small buffer to ensure we meet minimum
-            size = (stake_amount + 0.01) / price  # Add 1 cent buffer for rounding
+            # Create market order (Polymarket handles share calculation and execution)
+            print(f"[DEBUG] Creating MARKET BUY order for ${stake_amount:.2f}...")
+            market_order = MarketOrderArgs(
+                token_id=token_id,
+                amount=stake_amount,  # Dollar amount to spend
+                side=BUY,
+                order_type=FOK  # Fill-Or-Kill: execute immediately or cancel
+            )
             
-            print(f"[DEBUG] Calculated: stake=${stake_amount:.2f}, price=${price:.4f}, size={size:.4f} shares, total=${size*price:.4f}")
+            # Refresh API credentials
+            try:
+                creds = self._client.create_or_derive_api_creds()
+                self._client.set_api_creds(creds)
+            except Exception as cred_error:
+                print(f"[DEBUG] Warning: Could not refresh credentials: {cred_error}")
             
-            # Create limit order
-            return self.execute_market_buy(token_id, size)
+            # Sign and post the market order
+            signed_order = self._client.create_market_order(market_order)
+            
+            print(f"[DEBUG] Posting market order (FOK)...")
+            
+            try:
+                resp = self._client.post_order(signed_order, FOK)
+                print(f"[DEBUG] Market order response: {resp}")
+            except Exception as post_error:
+                # Handle allowance errors with retry (same as limit orders)
+                error_detail = str(post_error)
+                if hasattr(post_error, 'error_message') and isinstance(post_error.error_message, dict):
+                    error_detail = post_error.error_message.get('error', error_detail)
+                
+                if "balance / allowance" in error_detail or "allowance" in error_detail.lower():
+                    print(f"\n[yellow]USDC allowance required. Attempting to approve...[/yellow]")
+                    print(f"[dim]This is a one-time on-chain transaction (costs ~$0.01 in gas)[/dim]\n")
+                    
+                    allowance_ok, allowance_msg = self.approve_allowance()
+                    
+                    if allowance_ok:
+                        print(f"\n[green]✓ Allowance approved![/green]")
+                        print(f"[dim]Retrying trade...[/dim]\n")
+                        import time
+                        time.sleep(5)
+                        
+                        # Retry
+                        resp = self._client.post_order(signed_order, FOK)
+                        print(f"[DEBUG] Retry response: {resp}")
+                    else:
+                        return TradeExecutionResult(
+                            success=False,
+                            order_id=None,
+                            error=f"Failed to approve allowance: {allowance_msg}",
+                            executed_price=0.0,
+                            executed_size=0.0,
+                        )
+                else:
+                    return TradeExecutionResult(
+                        success=False,
+                        order_id=None,
+                        error=f"{error_detail}",
+                        executed_price=0.0,
+                        executed_size=0.0,
+                    )
+            
+            # Extract execution details from response
+            if isinstance(resp, dict):
+                success = resp.get("success", False)
+                order_id = resp.get("orderID")
+                error = resp.get("error")
+                
+                # Get actual execution amounts
+                taking_amount = resp.get("takingAmount")  # USDC spent
+                making_amount = resp.get("makingAmount")  # Shares received
+                
+                actual_price = 0.0
+                actual_size = 0.0
+                
+                if taking_amount and making_amount:
+                    try:
+                        actual_spent = float(taking_amount)
+                        actual_shares = float(making_amount)
+                        if actual_shares > 0:
+                            actual_price = actual_spent / actual_shares
+                            actual_size = actual_shares
+                            print(f"[DEBUG] Execution: ${actual_spent:.2f} for {actual_shares:.4f} shares @ ${actual_price:.4f}/share")
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                
+                if error and not success:
+                    error = f"{error} | Response: {resp}"
+                    
+                return TradeExecutionResult(
+                    success=success,
+                    order_id=order_id,
+                    error=error,
+                    executed_price=actual_price,
+                    executed_size=actual_size,
+                )
+            else:
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"Unexpected response type: {type(resp)}",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
             
         except Exception as e:
             error_msg = str(e)
@@ -363,7 +437,7 @@ class TradingService:
             return TradeExecutionResult(
                 success=False,
                 order_id=None,
-                error=f"Exception during trade execution: {type(e).__name__}: {error_msg}",
+                error=f"Exception during market order: {type(e).__name__}: {error_msg}",
                 executed_price=0.0,
                 executed_size=0.0,
             )
@@ -615,6 +689,8 @@ class TradingService:
     
     def execute_market_sell(self, token_id: str, size: float) -> TradeExecutionResult:
         """Execute a market sell order (close position).
+        
+        Uses MarketOrderArgs to sell at current market price via FOK (Fill-Or-Kill).
 
         Args:
             token_id: Token ID to sell
@@ -628,55 +704,44 @@ class TradingService:
             clob_types = import_module("py_clob_client.clob_types")
             constants = import_module("py_clob_client.order_builder.constants")
 
-            OrderArgs = getattr(clob_types, "OrderArgs")
+            MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
             OrderType = getattr(clob_types, "OrderType")
             SELL = getattr(constants, "SELL")
+            FOK = getattr(OrderType, "FOK")
 
-            # Get current orderbook to determine market price
-            # Token IDs from Polymarket API are decimal strings, use as-is
+            # Fetch orderbook to check spread and show info
+            print(f"[DEBUG] Checking spread for SELL order...")
             orderbook = self._client.get_order_book(token_id)
             
-            # Debug output
-            print(f"[DEBUG] Fetching orderbook for SELL token_id: {token_id[:16]}...")
-            
             best_bid = self._get_best_bid(orderbook)
-
-            if best_bid is None:
-                # Debug: check what we got back
-                if hasattr(orderbook, 'bids'):
-                    bids_count = len(orderbook.bids) if orderbook.bids else 0
-                elif isinstance(orderbook, dict):
-                    bids_count = len(orderbook.get("bids", []))
-                else:
-                    bids_count = 0
+            best_ask = self._get_best_ask(orderbook)
+            
+            # Show spread info
+            if best_bid and best_ask:
+                spread = best_ask - best_bid
+                spread_pct = (spread / best_ask) * 100 if best_ask > 0 else 0
+                print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
+                print(f"[DEBUG]   Best bid: ${best_bid:.4f} (you'll sell around this price)")
                 
-                return TradeExecutionResult(
-                    success=False,
-                    order_id=None,
-                    error=f"No liquidity available (token_id: {token_id[:16]}..., bids: {bids_count})",
-                    executed_price=0.0,
-                    executed_size=0.0,
-                )
+                if spread_pct > 10.0:
+                    print(f"[WARNING] Wide spread: {spread_pct:.1f}% - may get lower sell price!")
 
-            # Create limit order slightly below best bid to ensure fill
-            # Subtract 2% slippage tolerance, floored at 0.01
-            price = max(best_bid * 0.98, 0.01)
-
-            # Create order arguments (use original decimal format for order creation)
-            order_args = OrderArgs(
-                price=price,
-                size=size,
+            # Create market sell order (Polymarket handles pricing)
+            print(f"[DEBUG] Creating MARKET SELL order for {size:.4f} shares...")
+            market_order = MarketOrderArgs(
+                token_id=token_id,
+                amount=size,  # Number of shares to sell
                 side=SELL,
-                token_id=token_id,  # Use original format
+                order_type=FOK  # Fill-Or-Kill
             )
 
-            # Sign the order
-            signed_order = self._client.create_order(order_args)
+            # Sign the market order
+            signed_order = self._client.create_market_order(market_order)
 
-            # Post as Good-Till-Cancelled order
+            # Post as Fill-Or-Kill (market order)
             try:
-                resp = self._client.post_order(signed_order, OrderType.GTC)
-                print(f"[DEBUG] Sell order response: {resp}")
+                resp = self._client.post_order(signed_order, FOK)
+                print(f"[DEBUG] Market sell response: {resp}")
             except Exception as post_error:
                 # Extract detailed error
                 error_detail = str(post_error)
@@ -705,14 +770,30 @@ class TradingService:
                         
                         # Retry the sell order
                         try:
-                            resp = self._client.post_order(signed_order, OrderType.GTC)
+                            resp = self._client.post_order(signed_order, FOK)
                             print(f"[DEBUG] Retry sell response: {resp}")
                             
-                            # Check response
+                            # Extract execution from retry
+                            retry_price = 0.0
+                            retry_size = 0.0
+                            
                             if isinstance(resp, dict):
                                 success = resp.get("success", False)
                                 order_id = resp.get("orderID")
                                 error = resp.get("error")
+                                
+                                taking = resp.get("takingAmount")
+                                making = resp.get("makingAmount")
+                                if taking and making:
+                                    try:
+                                        shares_sold = float(taking)
+                                        usdc_received = float(making)
+                                        if shares_sold > 0:
+                                            retry_price = usdc_received / shares_sold
+                                            retry_size = shares_sold
+                                    except (ValueError, ZeroDivisionError):
+                                        pass
+                                
                                 if error and not success:
                                     error = f"{error} | Response: {resp}"
                             else:
@@ -724,8 +805,8 @@ class TradingService:
                                 success=success,
                                 order_id=order_id,
                                 error=error,
-                                executed_price=price,
-                                executed_size=size,
+                                executed_price=retry_price,
+                                executed_size=retry_size,
                             )
                         except Exception as retry_error:
                             retry_detail = str(retry_error)
@@ -754,26 +835,48 @@ class TradingService:
                     executed_size=0.0,
                 )
 
-            # Check response (handle both dict and exception cases)
+            # Extract execution details from response
             if isinstance(resp, dict):
                 success = resp.get("success", False)
                 order_id = resp.get("orderID")
                 error = resp.get("error")
-                # If error in response, include full response for debugging
+                
+                # Get actual execution amounts
+                taking_amount = resp.get("takingAmount")  # Shares sold
+                making_amount = resp.get("makingAmount")  # USDC received
+                
+                actual_price = 0.0
+                actual_size = 0.0
+                
+                if taking_amount and making_amount:
+                    try:
+                        actual_shares = float(taking_amount)
+                        actual_received = float(making_amount)
+                        if actual_shares > 0:
+                            actual_price = actual_received / actual_shares
+                            actual_size = actual_shares
+                            print(f"[DEBUG] SELL Execution: {actual_shares:.4f} shares for ${actual_received:.2f} @ ${actual_price:.4f}/share")
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                
                 if error and not success:
                     error = f"{error} | Response: {resp}"
+                    
+                return TradeExecutionResult(
+                    success=success,
+                    order_id=order_id,
+                    error=error,
+                    executed_price=actual_price,
+                    executed_size=actual_size,
+                )
             else:
-                success = False
-                order_id = None
-                error = f"Unexpected response type: {type(resp)}"
-
-            return TradeExecutionResult(
-                success=success,
-                order_id=order_id,
-                error=error,
-                executed_price=price,
-                executed_size=size,
-            )
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"Unexpected response type: {type(resp)}",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
 
         except Exception as e:
             # Get detailed error message
@@ -787,7 +890,7 @@ class TradingService:
             return TradeExecutionResult(
                 success=False,
                 order_id=None,
-                error=f"Exception during sell execution: {type(e).__name__}: {error_msg}",
+                error=f"Exception during market sell: {type(e).__name__}: {error_msg}",
                 executed_price=0.0,
                 executed_size=0.0,
             )
