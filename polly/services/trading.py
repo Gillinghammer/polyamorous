@@ -369,7 +369,7 @@ class TradingService:
             # Sign and post market order
             signed_order = self._client.create_market_order(market_order)
             
-            print(f"[DEBUG] Posting MARKET order (FOK) for {shares_to_buy:.4f} shares...")
+            print(f"[DEBUG] Posting MARKET order (FOK) for ${stake_amount:.2f}...")
             
             try:
                 resp = self._client.post_order(signed_order, FOK)
