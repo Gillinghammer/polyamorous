@@ -94,7 +94,7 @@ class TradingService:
             Tuple of (success, message)
         """
         try:
-            print("[DEBUG] Attempting to approve USDC allowance on-chain...")
+            print("[DEBUG] Checking if allowances are already set...")
             
             # Import web3
             try:
@@ -114,6 +114,41 @@ class TradingService:
             eth_account = import_module("eth_account")
             Account = getattr(eth_account, "Account")
             account = Account.from_key(self._private_key)
+            
+            # Check if allowances are already sufficient
+            print(f"[DEBUG] Checking existing allowances for {account.address[:10]}...")
+            
+            # ABI for checking allowance
+            check_allowance_abi = [
+                {
+                    "constant": True,
+                    "inputs": [
+                        {"name": "owner", "type": "address"},
+                        {"name": "spender", "type": "address"}
+                    ],
+                    "name": "allowance",
+                    "outputs": [{"name": "", "type": "uint256"}],
+                    "type": "function"
+                }
+            ]
+            
+            # Check USDC.e allowance (since that's what you have)
+            usdc_e_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(USDC_E_CONTRACT_ADDRESS),
+                abi=check_allowance_abi
+            )
+            
+            current_allowance = usdc_e_contract.functions.allowance(
+                account.address,
+                Web3.to_checksum_address(CTF_EXCHANGE_ADDRESS)
+            ).call()
+            
+            print(f"[DEBUG] Current USDC.e allowance: {current_allowance}")
+            
+            # If allowance is already max, we're good
+            if current_allowance > 10**12:  # More than 1M USDC worth
+                print(f"[DEBUG] Allowances already set! Skipping approval.")
+                return (True, "Allowances already configured (no new transaction needed)")
             
             # Max uint256 for unlimited approval
             max_approval = 2**256 - 1
@@ -392,8 +427,12 @@ class TradingService:
             signed_order = self._client.create_order(order_args)
             
             # Debug: print order details
-            print(f"[DEBUG] Posting BUY order: price={price:.4f}, size={size:.2f}, token_id={token_id[:16]}...")
-            print(f"[DEBUG] Order side: BUY, best_ask was: {best_ask:.4f}")
+            print(f"[DEBUG] Creating BUY order:")
+            print(f"[DEBUG]   Token ID: {token_id[:20]}...")
+            print(f"[DEBUG]   Limit Price: ${price:.4f} (best_ask: ${best_ask:.4f} + 2% slippage)")
+            print(f"[DEBUG]   Size: {size:.4f} shares")
+            print(f"[DEBUG]   Expected cost: ${size * price:.4f}")
+            print(f"[DEBUG] Posting order...")
 
             # Post as Good-Till-Cancelled order
             try:
@@ -500,11 +539,33 @@ class TradingService:
                     executed_size=0.0,
                 )
 
-            # Check response (handle both dict and exception cases)
+            # Check response and extract ACTUAL execution details
             if isinstance(resp, dict):
                 success = resp.get("success", False)
                 order_id = resp.get("orderID")
                 error = resp.get("error")
+                
+                # Extract actual execution from Polymarket response
+                taking_amount = resp.get("takingAmount")  # USDC actually spent
+                making_amount = resp.get("makingAmount")  # Shares actually received
+                
+                print(f"[DEBUG] BUY Response: success={success}, orderID={order_id}")
+                if taking_amount and making_amount:
+                    print(f"[DEBUG]   Actually spent: ${taking_amount} USDC")
+                    print(f"[DEBUG]   Actually received: {making_amount} shares")
+                    
+                    try:
+                        actual_spent = float(taking_amount)
+                        actual_shares = float(making_amount)
+                        if actual_shares > 0:
+                            actual_price = actual_spent / actual_shares
+                            print(f"[DEBUG]   Actual avg price: ${actual_price:.4f}/share (vs limit ${price:.4f})")
+                            # Update with actual execution values
+                            price = actual_price
+                            size = actual_shares
+                    except (ValueError, ZeroDivisionError):
+                        print(f"[DEBUG]   Could not parse execution amounts")
+                
                 # If error in response, include full response for debugging
                 if error and not success:
                     error = f"{error} | Response: {resp}"
@@ -537,7 +598,7 @@ class TradingService:
                 executed_price=0.0,
                 executed_size=0.0,
             )
-
+    
     def execute_market_sell(self, token_id: str, size: float) -> TradeExecutionResult:
         """Execute a market sell order (close position).
 
