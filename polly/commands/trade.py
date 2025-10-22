@@ -226,13 +226,18 @@ def handle_trade(
         # Calculate actual cost
         actual_cost = result.executed_price * result.executed_size
         
-        # Warn if execution price differs significantly from expected
+        # Always show execution summary
+        console.print(f"\n[bold cyan]Execution Summary:[/bold cyan]")
+        console.print(f"  Requested: ${amount:.2f}")
+        console.print(f"  Actually spent: ${actual_cost:.2f}")
+        console.print(f"  Shares: {result.executed_size:.4f}")
+        console.print(f"  Avg price: ${result.executed_price:.4f}/share")
+        
+        # Warn if execution differs significantly from expected
         if abs(actual_cost - amount) > 0.50:  # More than 50¢ difference
-            console.print(f"\n[bold yellow]⚠️  PRICE WARNING[/bold yellow]")
-            console.print(f"[yellow]Expected to spend: ${amount:.2f}[/yellow]")
-            console.print(f"[yellow]Actually spent: ${actual_cost:.2f}[/yellow]")
-            console.print(f"[yellow]Difference: ${abs(actual_cost - amount):.2f}[/yellow]")
-            console.print(f"[dim]Market price may have moved during order execution[/dim]\n")
+            diff_pct = abs((actual_cost - amount) / amount * 100) if amount > 0 else 0
+            console.print(f"\n[bold yellow]⚠️  EXECUTION VARIANCE: {diff_pct:.1f}%[/bold yellow]")
+            console.print(f"[yellow]This may be due to market order execution across multiple price levels[/yellow]\n")
         
         # Record trade in database with ACTUAL execution values
         trade = Trade(

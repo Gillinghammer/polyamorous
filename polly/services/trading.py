@@ -277,8 +277,7 @@ class TradingService:
     def execute_market_buy_with_amount(self, token_id: str, stake_amount: float) -> TradeExecutionResult:
         """Execute a market buy order with a specific stake amount.
         
-        Uses MarketOrderArgs to execute at current market price via FOK (Fill-Or-Kill).
-        This is simpler and more reliable than limit orders.
+        Calculates shares from stake amount and executes via limit order at best ask price.
 
         Args:
             token_id: Token ID to purchase
@@ -292,17 +291,26 @@ class TradingService:
             clob_types = import_module("py_clob_client.clob_types")
             constants = import_module("py_clob_client.order_builder.constants")
 
-            MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
+            OrderArgs = getattr(clob_types, "OrderArgs")
             OrderType = getattr(clob_types, "OrderType")
             BUY = getattr(constants, "BUY")
             FOK = getattr(OrderType, "FOK")
 
-            # Fetch orderbook to check spread and warn user
-            print(f"[DEBUG] Checking orderbook for spread analysis...")
+            # Fetch orderbook to check spread and get price
+            print(f"[DEBUG] Fetching orderbook for pricing...")
             orderbook = self._client.get_order_book(token_id)
             
             best_ask = self._get_best_ask(orderbook)
             best_bid = self._get_best_bid(orderbook)
+
+            if best_ask is None:
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"No liquidity available (no asks in orderbook)",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
 
             # Calculate and warn about spread
             if best_bid and best_ask:
@@ -322,13 +330,17 @@ class TradingService:
                 print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
-            # Create market order (Polymarket handles share calculation and execution)
             print(f"[DEBUG] Creating MARKET BUY order for ${stake_amount:.2f}...")
+            print(f"[DEBUG] Expected to buy ~{stake_amount/best_ask:.2f} shares at market price")
+            
+            # Use MarketOrderArgs - amount should be dollar amount for BUY
+            MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
+            
             market_order = MarketOrderArgs(
                 token_id=token_id,
-                amount=stake_amount,  # Dollar amount to spend
+                amount=stake_amount,  # Dollar amount to spend (per docs)
                 side=BUY,
-                order_type=FOK  # Fill-Or-Kill: execute immediately or cancel
+                order_type=FOK
             )
             
             # Refresh API credentials
@@ -338,10 +350,10 @@ class TradingService:
             except Exception as cred_error:
                 print(f"[DEBUG] Warning: Could not refresh credentials: {cred_error}")
             
-            # Sign and post the market order
+            # Sign and post market order
             signed_order = self._client.create_market_order(market_order)
             
-            print(f"[DEBUG] Posting market order (FOK)...")
+            print(f"[DEBUG] Posting MARKET order (FOK) for ${stake_amount:.2f}...")
             
             try:
                 resp = self._client.post_order(signed_order, FOK)
@@ -690,7 +702,7 @@ class TradingService:
     def execute_market_sell(self, token_id: str, size: float) -> TradeExecutionResult:
         """Execute a market sell order (close position).
         
-        Uses MarketOrderArgs to sell at current market price via FOK (Fill-Or-Kill).
+        Uses limit order at best bid price with FOK (Fill-Or-Kill) for immediate execution.
 
         Args:
             token_id: Token ID to sell
@@ -704,7 +716,7 @@ class TradingService:
             clob_types = import_module("py_clob_client.clob_types")
             constants = import_module("py_clob_client.order_builder.constants")
 
-            MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
+            OrderArgs = getattr(clob_types, "OrderArgs")
             OrderType = getattr(clob_types, "OrderType")
             SELL = getattr(constants, "SELL")
             FOK = getattr(OrderType, "FOK")
@@ -726,22 +738,31 @@ class TradingService:
                 if spread_pct > 10.0:
                     print(f"[WARNING] Wide spread: {spread_pct:.1f}% - may get lower sell price!")
 
-            # Create market sell order (Polymarket handles pricing)
-            print(f"[DEBUG] Creating MARKET SELL order for {size:.4f} shares...")
-            market_order = MarketOrderArgs(
+            if best_bid is None:
+                return TradeExecutionResult(
+                    success=False,
+                    order_id=None,
+                    error=f"No liquidity available (no bids in orderbook)",
+                    executed_price=0.0,
+                    executed_size=0.0,
+                )
+            
+            # Create limit sell order at best bid price (market taker)
+            print(f"[DEBUG] Creating limit SELL order (FOK) for {size:.4f} shares @ ${best_bid:.4f}...")
+            order_args = OrderArgs(
                 token_id=token_id,
-                amount=size,  # Number of shares to sell
-                side=SELL,
-                order_type=FOK  # Fill-Or-Kill
+                price=best_bid,  # Match best bid price exactly
+                size=size,
+                side=SELL
             )
 
-            # Sign the market order
-            signed_order = self._client.create_market_order(market_order)
+            # Sign and post the order
+            signed_order = self._client.create_order(order_args)
 
-            # Post as Fill-Or-Kill (market order)
+            # Post as Fill-Or-Kill (immediate execution or cancel)
             try:
                 resp = self._client.post_order(signed_order, FOK)
-                print(f"[DEBUG] Market sell response: {resp}")
+                print(f"[DEBUG] SELL order response: {resp}")
             except Exception as post_error:
                 # Extract detailed error
                 error_detail = str(post_error)
