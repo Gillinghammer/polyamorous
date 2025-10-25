@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from polly.autopilot.logging_config import setup_logging
 from polly.autopilot.wallet import WalletManager
 from polly.config import load_config, AppConfig
@@ -31,6 +33,9 @@ class AutopilotService:
     """
     
     def __init__(self, config_path: Path):
+        # Load environment variables
+        load_dotenv()
+        
         self.config = load_config(config_path)
         self.logger = setup_logging()
         self.running = False
