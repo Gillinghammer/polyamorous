@@ -320,7 +320,7 @@ class AutopilotService:
         )
         
         # Lower minimum for smaller balances
-        min_trade = 2.0  # $2 minimum (allows trading with small balances)
+        min_trade = 1.50  # $1.50 minimum (allows trading with very small balances)
         if safe_stake < min_trade:
             self.logger.info(f"   → SKIP: Position too small (${safe_stake:.2f} < ${min_trade} minimum)")
             return
@@ -413,15 +413,29 @@ class AutopilotService:
             )
             
             # Lower minimum for smaller balances
-            min_trade = 2.0  # $2 minimum
+            min_trade = 1.50  # $1.50 minimum
             if safe_stake < min_trade:
                 self.logger.info(f"      → Skip: {rec.market_question[:40]} (${safe_stake:.2f} < ${min_trade})")
                 continue
             
-            # Find the market
+            # Find the market - try multiple matching strategies
             market = next((m for m in group.markets if m.id == rec.market_id), None)
+            
+            # If ID match fails, try matching by question text
             if not market:
-                self.logger.warning(f"      → Skip: Could not find market {rec.market_id}")
+                # Extract candidate name from recommendation
+                rec_candidate = rec.market_question.split("Will ")[-1].split(" win")[0].strip() if "Will " in rec.market_question else rec.market_question.split(" ")[ 0]
+                
+                # Try to find by candidate name in question
+                for m in group.markets:
+                    if rec_candidate.lower() in m.question.lower():
+                        market = m
+                        self.logger.debug(f"      Matched by name: {rec_candidate} → {m.question[:50]}")
+                        break
+            
+            if not market:
+                candidate_name = rec.market_question[:40]
+                self.logger.warning(f"      → Skip: Could not find market for {candidate_name}")
                 continue
             
             # Find Yes outcome

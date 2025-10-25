@@ -54,14 +54,15 @@ class WalletManager:
         
         Args:
             recommended_stake: What research suggests
-            available_balance: Current wallet balance
+            available_balance: Current wallet balance (after gas reserve)
             current_exposure: Total value of active positions
             
         Returns:
             Actual stake to use (capped by balance and limits)
         """
-        # Total portfolio = balance + current exposure
-        total_portfolio = available_balance + current_exposure
+        # Total portfolio = available + gas reserve + current exposure
+        # (available_balance is already after gas reserve, so add it back for portfolio calc)
+        total_portfolio = available_balance + self.gas_reserve + current_exposure
         
         # Max 5% per position (configurable)
         max_position_pct = getattr(self.config, 'autopilot', None)
