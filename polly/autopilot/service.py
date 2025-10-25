@@ -392,10 +392,48 @@ class AutopilotService:
             self.logger.info(f"   → PASS: No positions suggested for entry")
             return
         
-        self.logger.info(f"   💼 Group strategy: {len(to_enter)} positions recommended")
+        # FIX: Match recommendations to actual markets by question similarity FIRST
+        # This populates correct market_ids and prevents duplicates
+        matched_recs = []
+        used_market_ids = set()
+        
+        for rec in to_enter:
+            # Find best matching market
+            best_match = None
+            best_score = 0.0
+            
+            rec_words = set(rec.market_question.lower().split())
+            
+            for m in group.markets:
+                # Skip if already used (prevent duplicates!)
+                if m.id in used_market_ids:
+                    continue
+                
+                market_words = set(m.question.lower().split())
+                common = rec_words & market_words
+                score = len(common) / max(len(rec_words), 1)
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = m
+            
+            if best_match and best_score > 0.60:  # 60% similarity threshold
+                # Update recommendation with correct market_id
+                rec.market_id = best_match.id
+                matched_recs.append((rec, best_match))
+                used_market_ids.add(best_match.id)  # Mark as used
+                self.logger.debug(f"      Pre-matched: {rec.market_question[:30]} → {best_match.question[:40]} (ID: {best_match.id[:8]}...)")
+            else:
+                self.logger.warning(f"      Skipping {rec.market_question[:40]}: No good match ({best_score:.0%} similarity)")
+        
+        if not matched_recs:
+            self.logger.info(f"   → No positions entered: Could not match recommendations to markets")
+            return
+        
+        self.logger.info(f"   ✓ Matched {len(matched_recs)} unique markets (prevented duplicates)")
         
         # Calculate total and scale to balance
-        total_recommended = sum(r.suggested_stake for r in to_enter)
+        total_recommended = sum(rec.suggested_stake for rec, _ in matched_recs)
         current_exposure = sum(t.stake_amount for t in self.trade_repo.list_active(filter_mode="real"))
         
         # Can only use 80% of balance
@@ -405,7 +443,7 @@ class AutopilotService:
         self.logger.info(f"   💰 Scaling: ${total_recommended:.0f} recommended → ${total_recommended * scale_factor:.2f} actual")
         
         entered_positions = []
-        for rec in to_enter:
+        for rec, matched_market in matched_recs:
             # Scale the stake
             scaled_stake = rec.suggested_stake * scale_factor
             
