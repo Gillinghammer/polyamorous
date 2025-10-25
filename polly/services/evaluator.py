@@ -51,6 +51,57 @@ class PositionEvaluator:
 
         return Evaluation(edge=edge, recommendation=recommendation, rationale=rationale)
     
+    def validate_longshot(self, rec: MarketRecommendation, current_odds: float) -> tuple[bool, str]:
+        """Check if longshot position has genuine substance beyond pure mathematical edge.
+        
+        For extreme longshots (<5% market odds), requires:
+        - Confidence ≥ 50% (not purely speculative)
+        - Assessed probability ≥ 5% (believe it's actually viable)
+        - Rationale mentions concrete catalysts (polls, trends, events)
+        
+        Args:
+            rec: The recommendation to validate
+            current_odds: Current market odds for this position
+            
+        Returns:
+            (is_valid, reason) tuple
+        """
+        
+        # If not a longshot, approve automatically
+        if current_odds >= 0.05:  # ≥5% is not extreme longshot
+            return (True, "Not a longshot")
+        
+        # For extreme longshots (<5%), apply higher standards
+        
+        # Check 1: Confidence must be ≥50% (not just 35%)
+        if rec.confidence < 50:
+            return (False, f"Longshot confidence too low ({rec.confidence:.0f}% < 50%)")
+        
+        # Check 2: Must believe it's at least 5% likely
+        if rec.probability < 0.05:
+            return (False, f"Assessed probability too low ({rec.probability:.1%} < 5%)")
+        
+        # Check 3: Rationale must mention concrete reasons
+        rationale_lower = rec.rationale.lower()
+        
+        # Look for evidence of substance
+        substance_keywords = [
+            'poll', 'polling', 'survey',  # Data
+            'surge', 'rising', 'momentum', 'trend', 'gaining',  # Movement
+            'endorsement', 'support', 'backed',  # Catalysts  
+            'scandal', 'controversy',  # Events affecting others
+            'recent', 'latest', 'yesterday', 'this week',  # Timely info
+            'percent', '%',  # Actual numbers
+        ]
+        
+        has_substance = any(word in rationale_lower for word in substance_keywords)
+        
+        if not has_substance:
+            return (False, "No concrete catalyst found (pure math edge)")
+        
+        # Passed all checks
+        return (True, f"Has substance (conf: {rec.confidence:.0f}%, prob: {rec.probability:.1%})")
+    
     def evaluate_group_recommendations(
         self,
         recommendations: list[MarketRecommendation],
