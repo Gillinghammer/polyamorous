@@ -359,10 +359,14 @@ class AutopilotService:
                 order_id=result.order_id,
             )
             
-            saved_trade = self.trade_repo.record_trade(trade)
-            
-            self.logger.info(f"   ✓ Position #{saved_trade.id} created: ${safe_stake:.2f} @ {result.executed_price:.1%}")
-            self.logger.info(f"   📊 Edge: {research.probability - result.executed_price:+.1%}, Confidence: {research.confidence:.0f}%")
+            try:
+                saved_trade = self.trade_repo.record_trade(trade)
+                self.logger.info(f"   ✓ Position #{saved_trade.id} created: ${safe_stake:.2f} @ {result.executed_price:.1%}")
+                self.logger.info(f"   📊 Edge: {research.probability - result.executed_price:+.1%}, Confidence: {research.confidence:.0f}%")
+            except Exception as db_error:
+                self.logger.error(f"   ✗ Database error saving trade: {db_error}", exc_info=True)
+                # Still log the on-chain position even if DB fails
+                self.logger.info(f"   ⚠️  Position created on-chain but not saved to DB: Order {result.order_id}")
             
             # Log to trades.log
             logging.getLogger("trades").info(
@@ -482,10 +486,14 @@ class AutopilotService:
                     group_strategy="multi_position_hedge"
                 )
                 
-                saved = self.trade_repo.record_trade(trade)
-                entered_positions.append(saved)
-                
-                self.logger.info(f"      ✓ Position #{saved.id} created")
+                try:
+                    saved = self.trade_repo.record_trade(trade)
+                    entered_positions.append(saved)
+                    self.logger.info(f"      ✓ Position #{saved.id} created")
+                except Exception as db_error:
+                    self.logger.error(f"      ✗ Database error: {db_error}", exc_info=True)
+                    # Still track that trade was made on-chain
+                    self.logger.info(f"      ⚠️  On-chain but not in DB: Order {result.order_id}")
                 
                 # Update available balance and exposure
                 available_balance -= safe_stake
