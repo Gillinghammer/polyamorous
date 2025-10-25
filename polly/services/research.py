@@ -205,12 +205,12 @@ class ResearchService:
             clamped_conf = max(0.0, min(100.0, raw_conf))
             
             recommendations.append(MarketRecommendation(
-                market_id=rec_data["market_id"],
-                market_question=rec_data["market_question"],
-                prediction=rec_data["prediction"],
-                probability=float(rec_data["probability"]),
+                market_id=rec_data.get("market_id", ""),
+                market_question=rec_data.get("market_question", ""),
+                prediction=rec_data.get("prediction", "Yes"),
+                probability=float(rec_data.get("probability", 0.5)),
                 confidence=clamped_conf,
-                rationale=rec_data["rationale"],
+                rationale=rec_data.get("rationale", ""),
                 entry_suggested=rec_data.get("entry_suggested", False),
                 suggested_stake=float(rec_data.get("suggested_stake", 100.0)),
             ))
