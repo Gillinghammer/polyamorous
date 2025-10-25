@@ -14,6 +14,7 @@ HELP_TEXT = """
   [yellow]/portfolio[/yellow]                      View trading performance
   [yellow]/trade <market> <outcome> [amt][/yellow] Manually execute trade (real mode only)
   [yellow]/close <trade_id>[/yellow]               Close active position (real mode only)
+  [yellow]/autopilot <cmd>[/yellow]                Monitor/control autopilot service
   [yellow]/help[/yellow]                           Show this help
   [yellow]/exit[/yellow]                           Quit Polly
 
@@ -51,9 +52,17 @@ HELP_TEXT = """
   • Research analyzes ALL candidates and can recommend multiple positions
   • Portfolio groups related positions for easy tracking
   • Ideal for hedge strategies and complex predictions
+
+[bold cyan]Autopilot Service:[/bold cyan]
+  • Background service that trades autonomously 24/7
+  • Monitors positions, re-researches when needed, executes trades
+  • Run: [green]python -m polly.autopilot[/green]
+  • Control: [green]/autopilot status|logs|stats[/green]
+  • Logs: [green]~/.polly/logs/[/green]
   
 [dim]Note: Markets with any outcome ≥80% odds or liquidity <$50k are auto-filtered[/dim]
 [dim]Trading mode set in config: mode: paper or mode: real[/dim]
+[dim]Autopilot requires mode: real and POLYGON_PRIVATE_KEY set[/dim]
 """
 
 

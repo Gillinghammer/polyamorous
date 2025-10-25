@@ -27,6 +27,7 @@ from polly.commands.portfolio import handle_portfolio
 from polly.commands.history import handle_history
 from polly.commands.research import handle_research
 from polly.commands.trade import handle_trade, handle_close
+from polly.commands.autopilot import handle_autopilot
 
 console = Console()
 
@@ -196,6 +197,9 @@ def route_command(command: str, context: CommandContext) -> None:
             context.config.trading,
             context.markets_cache,
         )
+    
+    elif cmd.startswith("/autopilot"):
+        handle_autopilot(args)
     
     elif cmd == "/exit":
         console.print("[yellow]Goodbye![/yellow]")

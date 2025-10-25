@@ -1,0 +1,19 @@
+[Unit]
+Description=Polly Autopilot Trading Service
+After=network.target
+
+[Service]
+Type=simple
+User=%USERNAME%
+WorkingDirectory=%INSTALL_PATH%
+Environment="XAI_API_KEY=%XAI_KEY%"
+Environment="POLYGON_PRIVATE_KEY=%POLYGON_KEY%"
+ExecStart=/usr/bin/python3 -m polly.autopilot
+Restart=always
+RestartSec=10
+StandardOutput=append:%LOG_PATH%/service.log
+StandardError=append:%LOG_PATH%/service_error.log
+
+[Install]
+WantedBy=multi-user.target
+
