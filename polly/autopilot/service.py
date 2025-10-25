@@ -224,8 +224,8 @@ class AutopilotService:
         
         # Check position count
         active_trades = self.trade_repo.list_active(filter_mode="real")
-        if len(active_trades) >= 10:
-            self.logger.info("🔎 Skipping opportunity scan (max 10 positions)")
+        if len(active_trades) >= 30:
+            self.logger.info("🔎 Skipping opportunity scan (max 30 positions)")
             return
         
         try:
