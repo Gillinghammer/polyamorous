@@ -39,12 +39,24 @@ class PolymarketService:
         return await asyncio.to_thread(self._fetch_markets_sync, None)
 
     async def fetch_market_by_id(self, condition_id: str) -> Market | None:
-        """Fetch a single market by condition_id."""
+        """Fetch a single market by condition_id.
+        
+        Searches both individual markets and markets within groups.
+        """
         def _inner() -> Market | None:
-            all_markets = self._fetch_markets_sync(None)
-            for m in all_markets:
-                if m.id == condition_id:
-                    return m
+            all_items = self._fetch_markets_sync(None)
+            
+            for item in all_items:
+                # Check if it's a direct market match
+                if isinstance(item, Market) and item.id == condition_id:
+                    return item
+                
+                # Check if it's inside a MarketGroup
+                if isinstance(item, MarketGroup):
+                    for market in item.markets:
+                        if market.id == condition_id:
+                            return market
+            
             return None
         return await asyncio.to_thread(_inner)
 
