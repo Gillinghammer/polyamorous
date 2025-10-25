@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from polly.models import Market, PortfolioMetrics, Trade
+from polly.models import Market, MarketGroup, PortfolioMetrics, Trade
 
 console = Console()
 
@@ -70,8 +70,8 @@ def format_payout(stake: float, odds: float) -> str:
     return f"${payout:.2f} (+{gain_pct:.0f}%)"
 
 
-def create_polls_table(markets: List[Market]) -> Table:
-    """Create Rich table for displaying polls."""
+def create_polls_table(items: List[Market | MarketGroup]) -> Table:
+    """Create Rich table for displaying polls (both binary markets and grouped events)."""
     table = Table(title="Available Polls", show_header=True, header_style="bold cyan")
     
     table.add_column("ID", style="dim", width=3)
@@ -81,35 +81,85 @@ def create_polls_table(markets: List[Market]) -> Table:
     table.add_column("Expires", style="magenta", width=8)
     table.add_column("Liquidity", style="green", justify="right", width=10)
     
-    for i, market in enumerate(markets, 1):
-        odds_str = format_odds(market.formatted_odds())
-        time_str = format_time_remaining(market.time_remaining)
-        # Show liquidity with k/M suffix
-        if market.liquidity >= 1_000_000:
-            liquidity_str = f"${market.liquidity/1_000_000:.1f}M"
-        elif market.liquidity >= 1_000:
-            liquidity_str = f"${market.liquidity/1_000:.0f}k"
+    for i, item in enumerate(items, 1):
+        if isinstance(item, MarketGroup):
+            # Display grouped multi-outcome event
+            time_str = format_time_remaining(item.time_remaining)
+            
+            # Show liquidity with k/M suffix
+            if item.liquidity >= 1_000_000:
+                liquidity_str = f"${item.liquidity/1_000_000:.1f}M"
+            elif item.liquidity >= 1_000:
+                liquidity_str = f"${item.liquidity/1_000:.0f}k"
+            else:
+                liquidity_str = f"${item.liquidity:.0f}"
+            
+            # Truncate category
+            category = item.category or "Other"
+            if len(category) > 11:
+                category = category[:9] + ".."
+            
+            # Truncate title
+            title = item.title
+            if len(title) > 52:
+                title = title[:49] + "..."
+            
+            # Get top 2 markets for preview
+            top_markets = item.get_top_markets(2)
+            if top_markets:
+                top_preview = ", ".join([
+                    f"{m.question.split('Will ')[-1].split(' win')[0] if 'Will ' in m.question else m.question[:15]}"
+                    f" {next((o.price for o in m.outcomes if o.outcome.lower() in ('yes', 'y')), 0.0):.0%}"
+                    for m in top_markets
+                ])
+                if len(top_preview) > 50:
+                    top_preview = top_preview[:47] + "..."
+            else:
+                top_preview = ""
+            
+            # Show number of markets as "odds"
+            odds_str = f"{len(item.markets)} opts"
+            
+            table.add_row(
+                str(i),
+                category,
+                f"⬐ {title}\n[dim]  {top_preview}[/dim]" if top_preview else f"⬐ {title}",
+                odds_str,
+                time_str,
+                liquidity_str,
+                style="bold" if item.liquidity > 1_000_000 else None
+            )
         else:
-            liquidity_str = f"${market.liquidity:.0f}"
-        
-        # Truncate category if too long
-        category = market.category or "Other"
-        if len(category) > 11:
-            category = category[:9] + ".."
-        
-        # Truncate question if too long
-        question = market.question
-        if len(question) > 52:
-            question = question[:49] + "..."
-        
-        table.add_row(
-            str(i),
-            category,
-            question,
-            odds_str,
-            time_str,
-            liquidity_str
-        )
+            # Display individual binary market
+            odds_str = format_odds(item.formatted_odds())
+            time_str = format_time_remaining(item.time_remaining)
+            
+            # Show liquidity with k/M suffix
+            if item.liquidity >= 1_000_000:
+                liquidity_str = f"${item.liquidity/1_000_000:.1f}M"
+            elif item.liquidity >= 1_000:
+                liquidity_str = f"${item.liquidity/1_000:.0f}k"
+            else:
+                liquidity_str = f"${item.liquidity:.0f}"
+            
+            # Truncate category
+            category = item.category or "Other"
+            if len(category) > 11:
+                category = category[:9] + ".."
+            
+            # Truncate question
+            question = item.question
+            if len(question) > 52:
+                question = question[:49] + "..."
+            
+            table.add_row(
+                str(i),
+                category,
+                question,
+                odds_str,
+                time_str,
+                liquidity_str
+            )
     
     return table
 
@@ -239,4 +289,63 @@ def create_recent_trades_table(trades: List[Trade]) -> Table:
         )
     
     return table
+
+
+def create_grouped_position_display(
+    event_id: str,
+    event_title: str,
+    trades: List[Trade],
+) -> Panel:
+    """Create display for grouped positions within same event.
+    
+    Args:
+        event_id: Event ID
+        event_title: Event title
+        trades: List of trades in this event group
+        
+    Returns:
+        Rich Panel with grouped position display
+    """
+    if not trades:
+        return Panel("No positions", title="Grouped Positions")
+    
+    # Calculate combined metrics
+    total_stake = sum(t.stake_amount for t in trades)
+    active_count = sum(1 for t in trades if t.status == "active")
+    
+    # Build content
+    content = f"[bold cyan]{event_title}[/bold cyan]\n"
+    content += f"[dim]Event ID: {event_id}[/dim]\n\n"
+    
+    if trades[0].group_strategy:
+        content += f"[bold]Strategy:[/bold] {trades[0].group_strategy}\n"
+    
+    content += f"[bold]Total Stake:[/bold] ${total_stake:.2f}\n"
+    content += f"[bold]Active Positions:[/bold] {active_count}/{len(trades)}\n\n"
+    
+    content += "[bold]Positions:[/bold]\n"
+    for i, trade in enumerate(trades, 1):
+        # Extract candidate name from question
+        candidate = trade.question.split("Will ")[-1].split(" win")[0] if "Will " in trade.question else trade.question[:30]
+        
+        status_icon = "●" if trade.status == "active" else ("✓" if trade.status == "won" else "✗")
+        status_color = "yellow" if trade.status == "active" else ("green" if trade.status == "won" else "red")
+        
+        content += f"  [{status_color}]{status_icon}[/{status_color}] {candidate} {trade.selected_option} @ {trade.entry_odds:.0%}"
+        
+        if trade.profit_loss is not None:
+            pnl_str = format_profit(trade.profit_loss)
+            content += f" | {pnl_str}"
+        else:
+            content += f" | ${trade.stake_amount:.0f}"
+        
+        content += "\n"
+    
+    # Calculate combined P&L if any resolved
+    resolved_trades = [t for t in trades if t.profit_loss is not None]
+    if resolved_trades:
+        combined_pnl = sum(t.profit_loss for t in resolved_trades)
+        content += f"\n[bold]Combined P&L:[/bold] {format_profit(combined_pnl)}"
+    
+    return Panel(content, title="📊 Grouped Event Positions", border_style="cyan")
 

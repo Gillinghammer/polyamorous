@@ -30,6 +30,11 @@ class Market:
     end_date: datetime
     outcomes: List[MarketOutcome]
     tags: List[str] = field(default_factory=list)
+    resolution_source: str = ""
+    # Event context for grouped markets
+    event_id: str | None = None
+    event_title: str | None = None
+    is_grouped: bool = False
 
     @property
     def time_remaining(self) -> timedelta:
@@ -44,6 +49,41 @@ class Market:
 
 
 @dataclass(slots=True)
+class MarketGroup:
+    """Grouped multi-outcome event (e.g., election with many candidates)."""
+    
+    id: str                          # Event ID from API
+    title: str
+    description: str
+    category: str
+    tags: List[str]
+    end_date: datetime
+    liquidity: float                 # Total event liquidity
+    volume_24h: float
+    enable_neg_risk: bool
+    show_all_outcomes: bool
+    markets: List[Market]            # All binary markets in group
+    resolution_source: str = ""
+    
+    @property
+    def time_remaining(self) -> timedelta:
+        """Return the remaining time until resolution."""
+        return max(self.end_date - datetime.now(tz=self.end_date.tzinfo), timedelta())
+    
+    def get_top_markets(self, n: int = 5) -> List[Market]:
+        """Get top N markets by highest Yes probability (winning odds)."""
+        def get_yes_price(market: Market) -> float:
+            """Get the 'Yes' price for a market, representing win probability."""
+            for outcome in market.outcomes:
+                if outcome.outcome.lower() in ('yes', 'y'):
+                    return outcome.price
+            # If no Yes found, return the minimum price (likely the winning outcome)
+            return min(o.price for o in market.outcomes) if market.outcomes else 0
+        
+        return sorted(self.markets, key=get_yes_price, reverse=True)[:n]
+
+
+@dataclass(slots=True)
 class ResearchProgress:
     """Represents incremental progress during a research run."""
 
@@ -51,6 +91,20 @@ class ResearchProgress:
     round_number: int
     total_rounds: int
     completed: bool = False
+
+
+@dataclass(slots=True)
+class MarketRecommendation:
+    """Single position recommendation within research."""
+    
+    market_id: str
+    market_question: str
+    prediction: str                  # "Yes" or "No"
+    probability: float
+    confidence: float
+    rationale: str
+    entry_suggested: bool
+    suggested_stake: float = 100.0   # Recommended stake amount for this position
 
 
 @dataclass(slots=True)
@@ -72,6 +126,10 @@ class ResearchResult:
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
     estimated_cost_usd: float | None = None
+    # Group support
+    event_id: str | None = None
+    is_grouped: bool = False
+    recommendations: List[MarketRecommendation] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -96,6 +154,11 @@ class Trade:
     closed_at: Optional[datetime]
     trade_mode: str = "paper"  # "paper" or "real"
     order_id: Optional[str] = None  # Polymarket order ID for real trades
+    # Group support
+    event_id: str | None = None
+    event_title: str | None = None
+    is_grouped: bool = False
+    group_strategy: str | None = None
 
 
 @dataclass(slots=True)

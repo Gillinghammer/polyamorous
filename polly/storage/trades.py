@@ -29,7 +29,34 @@ CREATE TABLE IF NOT EXISTS trades (
     profit_loss REAL,
     closed_at TEXT,
     trade_mode TEXT DEFAULT 'paper',
-    order_id TEXT
+    order_id TEXT,
+    event_id TEXT,
+    event_title TEXT,
+    is_grouped BOOLEAN DEFAULT 0,
+    group_strategy TEXT
+);
+
+CREATE TABLE IF NOT EXISTS market_groups (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    category TEXT,
+    end_date TEXT NOT NULL,
+    liquidity REAL,
+    volume_24h REAL,
+    enable_neg_risk BOOLEAN,
+    show_all_outcomes BOOLEAN,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trade_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    strategy_type TEXT,
+    total_stake REAL,
+    combined_ev REAL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (event_id) REFERENCES market_groups(id)
 );
 """
 
@@ -56,8 +83,8 @@ class TradeRepository:
                     market_id, question, category, selected_option, entry_odds, stake_amount,
                     entry_timestamp, predicted_probability, confidence, research_id,
                     status, resolves_at, actual_outcome, profit_loss, closed_at,
-                    trade_mode, order_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trade_mode, order_id, event_id, event_title, is_grouped, group_strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["market_id"],
@@ -77,6 +104,10 @@ class TradeRepository:
                     payload["closed_at"].isoformat() if payload["closed_at"] else None,
                     payload.get("trade_mode", "paper"),
                     payload.get("order_id"),
+                    payload.get("event_id"),
+                    payload.get("event_title"),
+                    payload.get("is_grouped", False),
+                    payload.get("group_strategy"),
                 ),
             )
             trade_id = cursor.lastrowid
@@ -111,12 +142,13 @@ class TradeRepository:
             rows = cursor.fetchall()
         return [self._row_to_trade(row) for row in rows]
 
-    def metrics(self, starting_cash: float = 0.0, filter_mode: str | None = None) -> PortfolioMetrics:
+    def metrics(self, starting_cash: float = 0.0, filter_mode: str | None = None, real_balance: float | None = None) -> PortfolioMetrics:
         """Compute aggregate portfolio metrics including balances and category stats.
         
         Args:
             starting_cash: Starting cash balance for paper trading
             filter_mode: Optional filter for trade mode ("paper" or "real"). If None, shows all trades.
+            real_balance: Actual on-chain balance for real mode (overrides paper tracking formula)
         """
 
         mode_filter = f"AND trade_mode = '{filter_mode}'" if filter_mode else ""
@@ -191,7 +223,11 @@ class TradeRepository:
         largest_win = float(realized_rows[0] or 0.0)
         largest_loss = float(realized_rows[1] or 0.0)
 
-        cash_available = float(starting_cash) + float(realized_total) - float(cash_in_play)
+        # Use real on-chain balance if provided (real mode), otherwise use paper tracking formula
+        if real_balance is not None:
+            cash_available = float(real_balance)
+        else:
+            cash_available = float(starting_cash) + float(realized_total) - float(cash_in_play)
 
         return PortfolioMetrics(
             active_positions=int(active_count),
@@ -280,20 +316,107 @@ class TradeRepository:
             )
             row = cursor.fetchone()
         return self._row_to_trade(row) if row else None
+    
+    def save_trade_group(self, trades: List[Trade], strategy_type: str = "multi_position") -> List[Trade]:
+        """Save multiple related trades as a group strategy."""
+        if not trades:
+            return []
+        
+        saved_trades = []
+        event_id = trades[0].event_id
+        total_stake = sum(t.stake_amount for t in trades)
+        
+        # Save each trade
+        for trade in trades:
+            saved_trade = self.record_trade(trade)
+            saved_trades.append(saved_trade)
+        
+        # Record the group strategy
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO trade_groups (event_id, strategy_type, total_stake, combined_ev, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    strategy_type,
+                    total_stake,
+                    0.0,  # Calculate combined EV externally
+                    datetime.now(tz=timezone.utc).isoformat(),
+                ),
+            )
+        
+        return saved_trades
+    
+    def get_grouped_trades(self, event_id: str | None = None) -> dict[str, List[Trade]]:
+        """Retrieve trades grouped by event_id."""
+        with self._connect() as connection:
+            if event_id:
+                cursor = connection.execute(
+                    """
+                    SELECT * FROM trades
+                    WHERE event_id = ? AND is_grouped = 1
+                    ORDER BY entry_timestamp DESC
+                    """,
+                    (event_id,),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    SELECT * FROM trades
+                    WHERE is_grouped = 1 AND event_id IS NOT NULL
+                    ORDER BY entry_timestamp DESC
+                    """
+                )
+            rows = cursor.fetchall()
+        
+        # Group by event_id
+        grouped = {}
+        for row in rows:
+            trade = self._row_to_trade(row)
+            if trade.event_id:
+                if trade.event_id not in grouped:
+                    grouped[trade.event_id] = []
+                grouped[trade.event_id].append(trade)
+        
+        return grouped
 
     def _row_to_trade(self, row: sqlite3.Row) -> Trade:
         """Convert sqlite row to Trade dataclass."""
 
         # Handle new columns with backward compatibility
+        row_keys = row.keys()
+        
         try:
-            trade_mode = row["trade_mode"] if "trade_mode" in row.keys() else "paper"
+            trade_mode = row["trade_mode"] if "trade_mode" in row_keys else "paper"
         except (KeyError, IndexError):
             trade_mode = "paper"
         
         try:
-            order_id = row["order_id"] if "order_id" in row.keys() else None
+            order_id = row["order_id"] if "order_id" in row_keys else None
         except (KeyError, IndexError):
             order_id = None
+            
+        try:
+            event_id = row["event_id"] if "event_id" in row_keys else None
+        except (KeyError, IndexError):
+            event_id = None
+            
+        try:
+            event_title = row["event_title"] if "event_title" in row_keys else None
+        except (KeyError, IndexError):
+            event_title = None
+            
+        try:
+            is_grouped = bool(row["is_grouped"]) if "is_grouped" in row_keys else False
+        except (KeyError, IndexError):
+            is_grouped = False
+            
+        try:
+            group_strategy = row["group_strategy"] if "group_strategy" in row_keys else None
+        except (KeyError, IndexError):
+            group_strategy = None
 
         return Trade(
             id=row["id"],
@@ -314,6 +437,10 @@ class TradeRepository:
             closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
             trade_mode=trade_mode,
             order_id=order_id,
+            event_id=event_id,
+            event_title=event_title,
+            is_grouped=is_grouped,
+            group_strategy=group_strategy,
         )
 
     def _connect(self) -> sqlite3.Connection:
@@ -334,6 +461,14 @@ class TradeRepository:
                 connection.execute("ALTER TABLE trades ADD COLUMN trade_mode TEXT DEFAULT 'paper'")
             if "order_id" not in names:
                 connection.execute("ALTER TABLE trades ADD COLUMN order_id TEXT")
+            if "event_id" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN event_id TEXT")
+            if "event_title" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN event_title TEXT")
+            if "is_grouped" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN is_grouped BOOLEAN DEFAULT 0")
+            if "group_strategy" not in names:
+                connection.execute("ALTER TABLE trades ADD COLUMN group_strategy TEXT")
         except Exception:
             # best-effort; avoid failing app startup
             pass

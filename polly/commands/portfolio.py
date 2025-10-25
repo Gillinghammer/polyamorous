@@ -11,6 +11,7 @@ from polly.ui.formatters import (
     create_portfolio_panel,
     create_active_positions_table,
     create_recent_trades_table,
+    create_grouped_position_display,
 )
 
 console = Console()
@@ -34,10 +35,21 @@ def handle_portfolio(
         console.print(f"\n{mode_badge}")
         console.print(f"[dim]Showing {trading_config.mode} trades only[/dim]\n")
         
+        # Get real balance if in real mode
+        real_balance = None
+        if trading_config.mode == "real" and trading_service:
+            try:
+                balances = trading_service.get_balances()
+                if "error" not in balances:
+                    real_balance = balances.get("usdc", 0.0)
+            except Exception:
+                pass
+        
         # Get portfolio metrics filtered by current mode
         metrics = trade_repo.metrics(
             starting_cash=trading_config.starting_cash,
-            filter_mode=trading_config.mode
+            filter_mode=trading_config.mode,
+            real_balance=real_balance
         )
         
         # Display metrics panel
@@ -81,8 +93,34 @@ def handle_portfolio(
         
         if active_trades:
             console.print()
-            table = create_active_positions_table(active_trades, live_positions)
-            console.print(table)
+            
+            # Separate grouped and ungrouped positions
+            grouped_trades = {}
+            ungrouped_trades = []
+            
+            for trade in active_trades:
+                if trade.is_grouped and trade.event_id:
+                    if trade.event_id not in grouped_trades:
+                        grouped_trades[trade.event_id] = []
+                    grouped_trades[trade.event_id].append(trade)
+                else:
+                    ungrouped_trades.append(trade)
+            
+            # Display grouped positions first
+            if grouped_trades:
+                console.print("[bold cyan]Grouped Event Positions:[/bold cyan]\n")
+                for event_id, trades in grouped_trades.items():
+                    event_title = trades[0].event_title or "Unknown Event"
+                    panel = create_grouped_position_display(event_id, event_title, trades)
+                    console.print(panel)
+                    console.print()
+            
+            # Display ungrouped positions
+            if ungrouped_trades:
+                if grouped_trades:
+                    console.print("[bold cyan]Individual Positions:[/bold cyan]\n")
+                table = create_active_positions_table(ungrouped_trades, live_positions)
+                console.print(table)
         else:
             console.print("\n[dim]No active positions[/dim]")
         

@@ -11,10 +11,10 @@ from rich.prompt import Confirm
 
 from polly.commands.trade import get_available_balance, prompt_for_amount
 from polly.config import TradingConfig, ResearchConfig
-from polly.models import Market, ResearchProgress, Trade
+from polly.models import Market, MarketGroup, ResearchProgress, ResearchResult, Trade
 from polly.services.evaluator import PositionEvaluator
 from polly.services.polymarket import PolymarketService
-from polly.services.research import ResearchService
+from polly.services.research import ResearchService, calculate_optimal_rounds
 from polly.services.trading import TradingService
 from polly.services.validators import check_usdc_balance, validate_market_active
 from polly.storage.research import ResearchRepository
@@ -26,7 +26,7 @@ console = Console()
 
 def handle_research(
     args: str,
-    markets_cache: List[Market],
+    markets_cache: List[Market | MarketGroup],
     polymarket: PolymarketService,
     research_service: ResearchService,
     evaluator: PositionEvaluator,
@@ -63,13 +63,29 @@ def handle_research(
         console.print(f"[red]Invalid poll ID: {args}. Expected a number from the polls list.[/red]")
         return
     
-    # Get market from cache or fetch
+    # Get item from cache
     if 0 <= poll_idx < len(markets_cache):
-        market = markets_cache[poll_idx]
+        item = markets_cache[poll_idx]
     else:
-        console.print(f"[yellow]Poll #{poll_idx + 1} not in cache. Run /polls first to see available markets.[/yellow]")
+        console.print(f"[yellow]Poll #{poll_idx + 1} not in cache. Run /polls first to see available items.[/yellow]")
         return
     
+    # Check if it's a grouped event or individual market
+    if isinstance(item, MarketGroup):
+        _handle_group_research(
+            group=item,
+            research_service=research_service,
+            evaluator=evaluator,
+            research_repo=research_repo,
+            trade_repo=trade_repo,
+            research_config=research_config,
+            trading_config=trading_config,
+            trading_service=trading_service,
+        )
+        return
+    
+    # Individual market research (existing flow)
+    market = item
     console.print(f"\n[bold cyan]Researching:[/bold cyan] {market.question}")
     console.print(f"[dim]Market ID: {market.id}[/dim]\n")
     
@@ -210,7 +226,7 @@ def _display_research_result(
     # Build content
     content = f"[bold]Prediction:[/bold] {result.prediction}\n"
     content += f"[bold]Probability:[/bold] {result.probability:.0%}\n"
-    content += f"[bold]Confidence:[/bold] {result.confidence:.0%}\n"
+    content += f"[bold]Confidence:[/bold] {int(result.confidence)}%\n"
     content += f"[bold]Edge vs Market:[/bold] {edge:+.1%}\n\n"
     content += f"[bold]Rationale:[/bold]\n{result.rationale}\n\n"
     
@@ -378,4 +394,371 @@ def _prompt_for_trade(
         
         console.print(f"\n[green]✓ Paper trade recorded! Position ID: {saved_trade.id}[/green]")
         console.print(f"[dim]Stake: ${trade.stake_amount:.2f} | Odds: {odds:.0%} | Expires: {market.end_date.strftime('%Y-%m-%d')}[/dim]")
+
+
+def _handle_group_research(
+    group: MarketGroup,
+    research_service: ResearchService,
+    evaluator: PositionEvaluator,
+    research_repo: ResearchRepository,
+    trade_repo: TradeRepository,
+    research_config: ResearchConfig,
+    trading_config: TradingConfig,
+    trading_service: TradingService | None,
+) -> None:
+    """Handle research for a grouped multi-outcome event."""
+    
+    console.print(f"\n[bold cyan]Researching Grouped Event:[/bold cyan] {group.title}")
+    console.print(f"[dim]Event ID: {group.id} | {len(group.markets)} markets | ${group.liquidity:,.0f} liquidity[/dim]\n")
+    
+    # Show top candidates
+    console.print("[cyan]Top candidates by winning probability:[/cyan]")
+    top_markets = group.get_top_markets(10)
+    for i, market in enumerate(top_markets, 1):
+        # Get Yes probability (winning chance)
+        yes_prob = next((o.price for o in market.outcomes if o.outcome.lower() in ('yes', 'y')), 0.0)
+        candidate = market.question.split("Will ")[-1].split(" win")[0] if "Will " in market.question else market.question[:40]
+        console.print(f"  {i}. {candidate}: {yes_prob:.1%}")
+    
+    if len(group.markets) > 10:
+        console.print(f"  ... and {len(group.markets) - 10} more\n")
+    else:
+        console.print()
+    
+    # Check if research already exists
+    existing = research_repo.get_by_market_id(group.id)
+    if existing:
+        console.print("[yellow]Research already exists for this event. Displaying cached results...[/yellow]\n")
+        result, edge, recommendation = existing
+        _display_group_research_result(group, result, trading_config)
+        
+        # Check if user already made a decision
+        decision = research_repo.get_decision(group.id)
+        if decision:
+            console.print(f"\n[dim]Previous decision: {decision}[/dim]")
+            return
+        
+        # Prompt for trades if recommendations exist
+        if result.recommendations:
+            _prompt_for_group_trades(
+                group=group,
+                result=result,
+                research_repo=research_repo,
+                trade_repo=trade_repo,
+                trading_config=trading_config,
+            )
+        return
+    
+    # Calculate optimal rounds for this event
+    optimal_rounds = calculate_optimal_rounds(group)
+    console.print(f"[dim]Adaptive research: {optimal_rounds} rounds planned based on event complexity[/dim]\n")
+    
+    # Run new group research
+    console.print("[cyan]Starting deep multi-outcome research...[/cyan]\n")
+    
+    progress_messages = []
+    
+    def progress_callback(progress: ResearchProgress) -> None:
+        """Callback for research progress updates."""
+        progress_messages.append(progress.message)
+    
+    # Run research with live progress display
+    with Live(Panel("Initializing group research...", title="Research Progress"), refresh_per_second=4) as live:
+        def update_callback(progress: ResearchProgress) -> None:
+            progress_callback(progress)
+            
+            # Show last 15 messages
+            recent = progress_messages[-15:]
+            formatted_messages = []
+            for msg in recent:
+                if msg.startswith("Round"):
+                    formatted_messages.append(f"[cyan]{msg}[/cyan]")
+                elif "🔍" in msg:
+                    formatted_messages.append(f"[green]{msg}[/green]")
+                else:
+                    formatted_messages.append(f"[dim]{msg}[/dim]")
+            
+            content = "\n".join(formatted_messages)
+            content += f"\n\n[bold]Round {progress.round_number}/{progress.total_rounds}[/bold]"
+            
+            if progress.completed:
+                content += "\n\n[green]✓ Group research complete![/green]"
+            
+            live.update(Panel(content, title="Group Research Progress", border_style="cyan"))
+        
+        try:
+            result = asyncio.run(research_service.research_market_group(
+                group=group,
+                callback=update_callback,
+                rounds=optimal_rounds,
+            ))
+            console.print("[dim]Research method returned successfully[/dim]")
+        except Exception as e:
+            console.print(f"\n[red]Research failed: {e}[/red]")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            return
+    
+    # Force output to appear after Live context closes
+    import time
+    time.sleep(0.2)  # Longer pause to ensure Live is fully closed
+    console.print("\n")  # Extra newline for separation
+    
+    console.print("[green]✓ Group research completed![/green]\n")
+    
+    # Show research quality metrics
+    console.print(f"[cyan]Research Quality:[/cyan]")
+    console.print(f"  Rounds: {result.rounds_completed}/{optimal_rounds}")
+    console.print(f"  Citations: {len(result.citations)} total")
+    console.print(f"  Recommendations: {len(result.recommendations)} positions")
+    if result.estimated_cost_usd:
+        console.print(f"  Cost: ${result.estimated_cost_usd:.4f}")
+    console.print()
+    
+    try:
+        # Store research results
+        research_repo.upsert_result(
+            result=result,
+            eval_edge=0.0,  # Group edge calculated differently
+            eval_recommendation="review",  # User reviews recommendations
+        )
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not store results: {e}[/yellow]\n")
+    
+    # Display results (with explicit error handling)
+    console.print("[dim]Preparing to display results...[/dim]\n")
+    
+    try:
+        _display_group_research_result(group, result, trading_config)
+        console.print("[dim]Results displayed successfully[/dim]\n")
+    except Exception as e:
+        console.print(f"[red]Error displaying results: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        return
+    
+    try:
+        # Validate research quality
+        _validate_research_quality(group, result)
+        console.print("[dim]Quality validation complete[/dim]\n")
+    except Exception as e:
+        console.print(f"[yellow]Warning: Quality validation failed: {e}[/yellow]\n")
+    
+    # Prompt for trades if recommendations exist
+    if result.recommendations:
+        try:
+            _prompt_for_group_trades(
+                group=group,
+                result=result,
+                research_repo=research_repo,
+                trade_repo=trade_repo,
+                trading_config=trading_config,
+            )
+        except Exception as e:
+            console.print(f"[red]Error prompting for trades: {e}[/red]")
+    else:
+        console.print("\n[yellow]No recommendations generated. Marking as pass.[/yellow]")
+        try:
+            research_repo.set_decision(group.id, "pass")
+        except Exception:
+            pass
+
+
+def _display_group_research_result(
+    group: MarketGroup,
+    result: ResearchResult,
+    trading_config: TradingConfig,
+) -> None:
+    """Display research results for a grouped event."""
+    
+    content = f"[bold]Event:[/bold] {group.title}\n"
+    content += f"[bold]Total Markets:[/bold] {len(group.markets)}\n\n"
+    
+    if result.recommendations:
+        total_suggested_stake = sum(r.suggested_stake for r in result.recommendations if r.entry_suggested)
+        content += f"[bold green]RECOMMENDATIONS ({len(result.recommendations)} positions):[/bold green]\n"
+        if total_suggested_stake > 0:
+            content += f"[dim]Total portfolio allocation: ${total_suggested_stake:.0f}[/dim]\n\n"
+        
+        for i, rec in enumerate(result.recommendations, 1):
+            # Extract candidate/party name from question
+            question = rec.market_question
+            if "Will " in question and " win" in question:
+                candidate = question.split("Will ")[-1].split(" win")[0].strip()
+            elif " - " in question:
+                candidate = question.split(" - ")[0].strip()
+            else:
+                # Try to find the unique part of the question
+                candidate = question.replace(group.title, "").strip().split(":")[0][:40]
+            
+            # Find market to get current odds - try multiple matching strategies
+            market = next((m for m in group.markets if m.id == rec.market_id), None)
+            
+            # If not found by ID, try matching by question similarity
+            if not market and candidate:
+                market = next((m for m in group.markets if candidate.lower() in m.question.lower()), None)
+            
+            current_odds = 0.0
+            if market:
+                current_odds = next((o.price for o in market.outcomes if o.outcome.lower() in ('yes', 'y')), 0.0)
+            
+            content += f"{i}. [bold]{candidate}[/bold] - {rec.prediction}\n"
+            content += f"   Win Probability: {rec.probability:.1%} | Current Odds: {current_odds:.1%} | Confidence: {int(rec.confidence)}%\n"
+            
+            if rec.entry_suggested:
+                pct_of_portfolio = (rec.suggested_stake / total_suggested_stake * 100) if total_suggested_stake > 0 else 0
+                content += f"   [green]✓ ENTER: ${rec.suggested_stake:.0f} ({pct_of_portfolio:.0f}% of portfolio)[/green]\n"
+                
+                # Calculate expected value
+                if current_odds > 0:
+                    shares = rec.suggested_stake / current_odds
+                    ev = (rec.probability * shares) - ((1 - rec.probability) * rec.suggested_stake)
+                    content += f"   Expected Value: [cyan]${ev:+.2f}[/cyan]\n"
+            else:
+                content += f"   [yellow]○ Analyze only (no entry suggested)[/yellow]\n"
+            
+            content += f"   {rec.rationale[:120]}...\n\n"
+    else:
+        content += "[yellow]No specific recommendations generated yet.[/yellow]\n"
+        content += f"[dim]This feature is under development.[/dim]\n"
+    
+    content += f"\n[bold]Overall Analysis:[/bold]\n{result.rationale[:200]}...\n\n"
+    
+    if result.key_findings:
+        content += f"[bold]Key Findings:[/bold]\n"
+        for finding in result.key_findings[:3]:
+            content += f"  • {finding}\n"
+    
+    if result.estimated_cost_usd:
+        content += f"\n[dim]Research cost: ${result.estimated_cost_usd:.4f} | Duration: {result.duration_minutes} min[/dim]"
+    
+    console.print(Panel(content, title="Group Research Results", border_style="green"))
+
+
+def _prompt_for_group_trades(
+    group: MarketGroup,
+    result: ResearchResult,
+    research_repo: ResearchRepository,
+    trade_repo: TradeRepository,
+    trading_config: TradingConfig,
+) -> None:
+    """Prompt user to enter multiple positions from group research."""
+    
+    # Filter to only entry-suggested recommendations
+    suggested = [r for r in result.recommendations if r.entry_suggested]
+    
+    if not suggested:
+        console.print("\n[yellow]No positions recommended for entry.[/yellow]")
+        research_repo.set_decision(group.id, "pass")
+        return
+    
+    console.print(f"\n[bold]Research suggests {len(suggested)} position(s):[/bold]")
+    console.print("[dim]Portfolio-optimized strategy with varying position sizes:[/dim]\n")
+    
+    total_stake = sum(rec.suggested_stake for rec in suggested)
+    total_ev = 0.0
+    
+    for i, rec in enumerate(suggested, 1):
+        # Extract candidate/party name
+        question = rec.market_question
+        if "Will " in question and " win" in question:
+            candidate = question.split("Will ")[-1].split(" win")[0].strip()
+        elif " - " in question:
+            candidate = question.split(" - ")[0].strip()
+        else:
+            candidate = question.replace(group.title, "").strip().split(":")[0][:40]
+        
+        # Find market to get current odds - try multiple matching strategies
+        market = next((m for m in group.markets if m.id == rec.market_id), None)
+        if not market and candidate:
+            market = next((m for m in group.markets if candidate.lower() in m.question.lower()), None)
+        if market:
+            # Get Yes probability (winning odds)
+            odds = next((o.price for o in market.outcomes if o.outcome.lower() in ('yes', 'y')), 0.5)
+            
+            # Calculate EV and potential payout
+            shares = rec.suggested_stake / odds if odds > 0 else 0
+            payout = shares * 1.0  # Binary contracts pay $1 per share
+            ev = (rec.probability * shares) - ((1 - rec.probability) * rec.suggested_stake)
+            total_ev += ev
+            
+            pct_of_portfolio = (rec.suggested_stake / total_stake * 100) if total_stake > 0 else 0
+            
+            console.print(f"  {i}. [cyan]{candidate}[/cyan] {rec.prediction} @ {odds:.1%}")
+            console.print(f"     Stake: [bold]${rec.suggested_stake:.0f}[/bold] ({pct_of_portfolio:.0f}% of portfolio)")
+            console.print(f"     Potential: ${payout:.0f} | EV: ${ev:+.2f}")
+    
+    console.print(f"\n[bold]Portfolio Summary:[/bold]")
+    console.print(f"  Total Stake: ${total_stake:.0f}")
+    console.print(f"  Combined EV: [cyan]${total_ev:+.2f}[/cyan]")
+    
+    # Calculate ROI
+    roi = (total_ev / total_stake * 100) if total_stake > 0 else 0
+    console.print(f"  Portfolio ROI: [cyan]{roi:+.1f}%[/cyan]")
+    console.print(f"  Strategy: Diversified hedge across {len(suggested)} positions")
+    
+    # For now, just record decision
+    console.print("\n[yellow]⚠️  Multi-position entry not yet implemented.[/yellow]")
+    console.print("[yellow]Paper trading for grouped events coming soon![/yellow]")
+    research_repo.set_decision(group.id, "review")
+
+
+def _validate_research_quality(group: MarketGroup, result: ResearchResult) -> None:
+    """Validate research quality and show warnings if metrics are low."""
+    
+    warnings = []
+    successes = []
+    
+    # Check citation count
+    if len(result.citations) >= 10:
+        successes.append(f"✓ Good citation count ({len(result.citations)})")
+    elif len(result.citations) >= 5:
+        warnings.append(f"⚠ Low citation count ({len(result.citations)}, target: 10+)")
+    else:
+        warnings.append(f"⚠ Very low citations ({len(result.citations)}, needs improvement)")
+    
+    # Check if found edge
+    if result.recommendations:
+        edges = []
+        for rec in result.recommendations:
+            # Find market
+            market = next((m for m in group.markets if m.id == rec.market_id), None)
+            if market:
+                current = next((o.price for o in market.outcomes if o.outcome.lower() in ('yes', 'y')), 0.0)
+                edge = abs(rec.probability - current)
+                edges.append(edge)
+        
+        max_edge = max(edges) if edges else 0.0
+        if max_edge > 0.15:
+            successes.append(f"✓ Found strong edge ({max_edge:.1%})")
+        elif max_edge > 0.10:
+            successes.append(f"✓ Found moderate edge ({max_edge:.1%})")
+        else:
+            warnings.append(f"⚠ Weak edge found ({max_edge:.1%}, may not justify entry)")
+    
+    # Check recommendations count
+    entry_count = sum(1 for r in result.recommendations if r.entry_suggested)
+    if entry_count >= 2:
+        successes.append(f"✓ Multi-position hedge ({entry_count} positions)")
+    elif entry_count == 1:
+        warnings.append("⚠ Single position only (no hedge diversification)")
+    else:
+        warnings.append("⚠ No entry recommendations (no edge found)")
+    
+    # Check confidence
+    if result.confidence >= 80:
+        successes.append(f"✓ High confidence ({result.confidence:.0f}%)")
+    elif result.confidence >= 60:
+        successes.append(f"○ Moderate confidence ({result.confidence:.0f}%)")
+    else:
+        warnings.append(f"⚠ Low confidence ({result.confidence:.0f}%)")
+    
+    # Display validation results
+    if successes or warnings:
+        console.print("\n[bold]Research Quality Assessment:[/bold]")
+        for success in successes:
+            console.print(f"  {success}")
+        for warning in warnings:
+            console.print(f"  [yellow]{warning}[/yellow]")
+        console.print()
 

@@ -490,3 +490,388 @@ polls:
 database:
   path: ~/.polly/trades.db      # SQLite database
 ```
+
+---
+
+## 15) Multi-Outcome Market Support - Implementation Plan
+
+### Discovery Summary
+
+**Finding**: Polymarket's multi-outcome markets are actually **groups of binary markets within a single event**.
+
+**Example**: "Democratic Presidential Nominee 2028" event contains 128 binary Yes/No markets (one per candidate):
+- "Will Gretchen Whitmer win?" (Yes/No) - $210k liquidity
+- "Will Oprah Winfrey win?" (Yes/No) - $322k liquidity  
+- ... 126 more candidates
+
+**Indicators**:
+- `enableNegRisk: true` - Market uses neg-risk contracts for mutual exclusivity
+- `showAllOutcomes: true` - Display all options together
+- Event has multiple markets (e.g., 128 markets in one event)
+
+**Current API Status**:
+- Total events: 500+ active
+- Events with grouped markets: 167 (33%)
+- Largest grouped events: 128 markets each
+- Total market coverage: 3,100+ binary markets
+
+### Architecture Changes Required
+
+#### Phase 1: Data Model Updates
+
+**1.1 Add `MarketGroup` Model** (`polly/models.py`)
+```python
+@dataclass(slots=True)
+class MarketGroup:
+    """Represents a multi-outcome event with grouped markets."""
+    id: str                          # Event ID
+    title: str                       # "Democratic Presidential Nominee 2028"
+    description: str
+    category: str
+    tags: List[str]
+    end_date: datetime
+    liquidity: float                 # Total event liquidity
+    volume_24h: float
+    enable_neg_risk: bool            # True for multi-outcome
+    show_all_outcomes: bool          # True for multi-outcome
+    markets: List[Market]            # All candidate markets
+    resolution_source: str
+```
+
+**1.2 Update `Market` Model** - Add event context:
+```python
+@dataclass(slots=True)
+class Market:
+    # ... existing fields ...
+    event_id: str | None = None      # Parent event if part of group
+    event_title: str | None = None   # For context
+    is_grouped: bool = False         # True if part of multi-outcome event
+```
+
+**1.3 Update `Trade` Model** - Support grouped positions:
+```python
+@dataclass(slots=True)
+class Trade:
+    # ... existing fields ...
+    event_id: str | None = None      # Parent event for grouped trades
+    event_title: str | None = None
+    is_grouped: bool = False         # Part of multi-outcome strategy
+    group_strategy: str | None = None  # "hedge", "multiple_positions", etc.
+```
+
+**1.4 Update `ResearchResult` Model** - Support multi-market recommendations:
+```python
+@dataclass(slots=True)
+class ResearchResult:
+    # ... existing fields ...
+    event_id: str | None = None
+    recommendations: List[MarketRecommendation]  # Can suggest multiple
+    
+@dataclass(slots=True)
+class MarketRecommendation:
+    """Single recommendation within research."""
+    market_id: str
+    market_question: str
+    prediction: str                  # "Yes" or "No"
+    probability: float              # 0-1
+    confidence: float               # 0-100
+    rationale: str
+    entry_suggested: bool
+```
+
+#### Phase 2: API & Fetching Updates
+
+**2.1 Update `PolymarketService._fetch_markets_sync()`** (`polly/services/polymarket.py`)
+
+Current: Flattens all markets into list
+Needed: Detect and preserve grouped events
+
+```python
+def _fetch_markets_sync(self, page: int | None = 1, page_size: int = 20):
+    """Return both individual markets AND grouped events."""
+    
+    # For each event:
+    #   - If event has 1 market: Return as individual Market
+    #   - If event has >1 market AND enableNegRisk/showAllOutcomes:
+    #     Return as MarketGroup
+    
+    # Apply filters to both types
+    # Sort by liquidity score
+    # Return Union[List[Market], List[MarketGroup]]
+```
+
+**2.2 Add Helper Methods**:
+```python
+def is_multi_outcome_event(event: dict) -> bool:
+    """Check if event represents multi-outcome market."""
+    return (
+        event.get("enableNegRisk") or 
+        event.get("showAllOutcomes")
+    ) and len(event.get("markets", [])) > 1
+
+def create_market_group(event: dict) -> MarketGroup:
+    """Convert event with multiple markets into MarketGroup."""
+    # Extract all markets
+    # Enrich with event metadata
+    # Return structured group
+```
+
+#### Phase 3: UI Updates
+
+**3.1 Update `/polls` Display** (`polly/commands/polls.py`)
+
+Current: Shows flat list of binary markets
+Needed: Show both individual markets AND grouped events
+
+Display Format:
+```
+┏━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓
+┃ ID ┃ Type    ┃ Question                         ┃ Odds   ┃ Expiry┃ Liquidity ┃
+┡━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩
+│ 1  │ Binary  │ Will Bitcoin reach $130k by...  │ No 61% │ 69d   │ $72k      │
+│ 2  │ ⬐ Group │ Democratic Presidential Nom...  │ 128    │ 1275d │ $13.1M    │
+│    │         │   Top: Whitmer (22%), Newsom.. │ opts   │       │           │
+└────┴─────────┴─────────────────────────────────┴────────┴───────┴───────────┘
+```
+
+**3.2 Update `create_polls_table()`** (`polly/ui/formatters.py`)
+- Handle both Market and MarketGroup types
+- Show group indicators
+- Display top N candidates for grouped events
+- Format group differently from binary
+
+**3.3 Add Group Detail View**
+
+New command: `/polls <group_id> detail` or auto-expand on selection
+```
+Event: Democratic Presidential Nominee 2028 (128 candidates)
+Total Liquidity: $13.1M | Expires: May 2028
+
+Top Candidates by Probability:
+  1. Gretchen Whitmer    22%  ($210k liq)
+  2. Gavin Newsom        18%  ($798k liq)
+  3. Oprah Winfrey       12%  ($322k liq)
+  ...
+  Show all 128 candidates? (y/n)
+```
+
+#### Phase 4: Research Updates
+
+**4.1 Update Research Prompt** (`polly/services/research.py`)
+
+Add event context awareness:
+```python
+if market_or_group.is_grouped:
+    prompt = f"""
+    You are researching a MULTI-OUTCOME event:
+    
+    Event: {group.title}
+    Total Options: {len(group.markets)}
+    Current Market Leaders: {top_3_by_odds}
+    Event Liquidity: ${group.liquidity}
+    
+    Your goal: Analyze ALL viable candidates and identify:
+    1. Most likely winner(s)
+    2. Overvalued candidates (market too optimistic)
+    3. Undervalued candidates (market missing something)
+    4. Hedge opportunities (multiple positions to reduce risk)
+    
+    You may recommend positions on MULTIPLE candidates if:
+    - Hedging reduces variance while maintaining edge
+    - Multiple undervalued candidates improve expected value
+    - Correlation between candidates justifies combined strategy
+    
+    Output format:
+    - Primary recommendation: Candidate + confidence + rationale
+    - Secondary recommendations: Other positions + why
+    - Hedge strategy: How positions work together (if applicable)
+    - Citations: All sources
+    """
+```
+
+**4.2 Multi-Market Evaluation**
+
+Update evaluator to handle:
+- Multiple position recommendations from single research
+- Portfolio-level EV calculation across correlated positions
+- Hedge strategies (e.g., bet on top 2 candidates to reduce risk)
+
+```python
+def evaluate_group_position(
+    research: ResearchResult,
+    group: MarketGroup
+) -> List[PositionRecommendation]:
+    """Evaluate positions across multiple markets in a group."""
+    
+    # For each recommended market in the group:
+    #   - Calculate individual EV
+    #   - Calculate correlation with other recommendations
+    #   - Assess combined EV and risk
+    
+    # Return list of recommended positions with:
+    #   - Individual rationale
+    #   - How they work together as a strategy
+    #   - Total expected value
+    #   - Risk reduction from hedging (if applicable)
+```
+
+#### Phase 5: Trading & Portfolio Updates
+
+**5.1 Update Trade Entry** (`polly/commands/trade.py`)
+
+Support entering multiple positions from single research:
+```python
+# After research recommends multiple positions:
+print("Research recommends 3 positions:")
+print("  1. Gretchen Whitmer YES @ 22% - $100 stake")
+print("  2. Gavin Newsom YES @ 18% - $100 stake")  
+print("  3. Combined EV: +$X | Risk reduction: Y%")
+print()
+print("Enter all recommended positions? (y/n/custom)")
+# If custom: Allow selecting subset of recommendations
+```
+
+**5.2 Update Portfolio Display** (`polly/commands/portfolio.py`)
+
+Group related positions:
+```
+Active Positions (3 events, 5 total positions)
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📊 Democratic Presidential Nominee 2028 (Event ID: evt_123)      ┃
+┃    Strategy: Multi-position hedge                                ┃
+┃    Total Stake: $200 | Combined EV: +$45 | Days Left: 1,275      ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  Position 1: Whitmer YES @ 22% | Stake: $100 | Current: 24%     ┃
+┃  Position 2: Newsom YES @ 18%  | Stake: $100 | Current: 19%     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📊 Bitcoin above $130k by Dec 31? (Binary)                       ┃
+┃    Stake: $100 | Entry: No @ 61% | Current: No @ 62%             ┃
+┃    Days Left: 69 | Current EV: +$8                               ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+```
+
+**5.3 Database Schema Updates** (`polly/storage/trades.py`)
+
+Add tables for grouped positions:
+```sql
+-- New table
+CREATE TABLE market_groups (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    category TEXT,
+    end_date TEXT NOT NULL,
+    liquidity REAL,
+    volume_24h REAL,
+    enable_neg_risk BOOLEAN,
+    show_all_outcomes BOOLEAN,
+    created_at TEXT NOT NULL
+);
+
+-- Update trades table
+ALTER TABLE trades ADD COLUMN event_id TEXT;
+ALTER TABLE trades ADD COLUMN event_title TEXT;
+ALTER TABLE trades ADD COLUMN is_grouped BOOLEAN DEFAULT 0;
+ALTER TABLE trades ADD COLUMN group_strategy TEXT;
+
+-- New table for tracking grouped trade strategies
+CREATE TABLE trade_groups (
+    id INTEGER PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    strategy_type TEXT,  -- "hedge", "multiple_positions", etc.
+    total_stake REAL,
+    combined_ev REAL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (event_id) REFERENCES market_groups(id)
+);
+```
+
+#### Phase 6: Implementation Order
+
+**Week 1: Core Data Models**
+- [ ] Add `MarketGroup` model
+- [ ] Update `Market` with event context
+- [ ] Update `Trade` with group support
+- [ ] Update `ResearchResult` with multi-recommendations
+- [ ] Database migration script
+
+**Week 2: API & Fetching**
+- [ ] Update `_fetch_markets_sync()` to detect groups
+- [ ] Add `is_multi_outcome_event()` helper
+- [ ] Add `create_market_group()` builder
+- [ ] Update filtering to handle both types
+- [ ] Update sorting to handle both types
+
+**Week 3: UI Display**
+- [ ] Update `/polls` to show groups
+- [ ] Add group detail view
+- [ ] Update `create_polls_table()` formatter
+- [ ] Add group selection in CLI
+- [ ] Test with real grouped events
+
+**Week 4: Research Integration**
+- [ ] Update research prompt for groups
+- [ ] Add multi-market evaluation logic
+- [ ] Update progress display for group research
+- [ ] Test with major grouped events (2028 elections)
+
+**Week 5: Trading & Portfolio**
+- [ ] Update trade entry for multiple positions
+- [ ] Add grouped position display in portfolio
+- [ ] Update P&L calculation for group strategies
+- [ ] Add position correlation tracking
+- [ ] Test full flow: research → trade → portfolio
+
+**Week 6: Polish & Autopilot Foundation**
+- [ ] Real-time odds updates for groups
+- [ ] Position rebalancing alerts
+- [ ] Exit strategy for group positions
+- [ ] Groundwork for autopilot (monitoring, triggers)
+- [ ] Documentation update
+
+### Key Design Decisions
+
+**1. Keep Binary Markets Simple**: Don't force everything into groups. Support both:
+   - Individual binary markets (majority of markets)
+   - Grouped multi-outcome events (33% of events)
+
+**2. Research Can Recommend Multiple Positions**: 
+   - Primary recommendation + optional secondary positions
+   - Explain how positions work together
+   - Calculate combined EV and risk
+
+**3. Portfolio Tracks Groups**:
+   - Show individual positions
+   - Roll up to event-level strategy view
+   - Calculate group-level P&L
+
+**4. UI Mimics Polymarket Web**:
+   - Grouped events displayed prominently
+   - Expand to see all candidates
+   - Clear visual hierarchy
+
+**5. Autopilot-Ready Architecture**:
+   - Event monitoring (not just market monitoring)
+   - Strategy-level decisions (not just single trades)
+   - Correlation and hedge awareness built-in
+
+### Migration Path
+
+**No backwards compatibility needed** - User approved fresh start:
+1. Drop existing database
+2. Implement new schema
+3. Update all code to new models
+4. Test with live data
+5. Deploy
+
+### Success Metrics
+
+- [ ] Can fetch and display 167+ grouped events
+- [ ] Can research multi-outcome events
+- [ ] Can enter multiple positions from single research
+- [ ] Portfolio correctly groups related positions
+- [ ] UI closely matches Polymarket web experience
+- [ ] Foundation in place for autopilot trading

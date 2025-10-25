@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from polly.config import TradingConfig
-from polly.models import Market, Trade
+from polly.models import Market, MarketGroup, Trade
 from polly.services.trading import TradingService
 from polly.services.validators import (
     check_usdc_balance,
@@ -115,7 +115,7 @@ def prompt_for_amount(
 
 def handle_trade(
     args: str,
-    markets_cache: List[Market],
+    markets_cache: List[Market | MarketGroup],
     trading_service: Optional[TradingService],
     trade_repo: TradeRepository,
     trading_config: TradingConfig,
@@ -163,7 +163,15 @@ def handle_trade(
         console.print(f"[red]Invalid market number. Must be 1-{len(markets_cache)}[/red]")
         return
 
-    market = markets_cache[market_num - 1]
+    item = markets_cache[market_num - 1]
+    
+    # Check if it's a grouped event
+    if isinstance(item, MarketGroup):
+        console.print("[yellow]⚠️  Direct trading on grouped events not yet supported.[/yellow]")
+        console.print("[yellow]Use /research command for multi-outcome events.[/yellow]")
+        return
+    
+    market = item
 
     # Validate market is active
     is_active, error_msg = validate_market_active(market)
@@ -276,7 +284,7 @@ def handle_close(
     trade_repo: TradeRepository,
     trading_service: Optional[TradingService],
     trading_config: TradingConfig,
-    markets_cache: List[Market] = None,
+    markets_cache: List[Market | MarketGroup] = None,
 ) -> None:
     """Handle /close <trade_id> command.
 

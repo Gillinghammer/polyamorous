@@ -297,14 +297,10 @@ class TradingService:
             FOK = getattr(OrderType, "FOK")
 
             # Get market price using price API (no orderbooks needed!)
-            print(f"[DEBUG] Fetching market price for token_id: {token_id[:20]}...")
-            
             try:
                 # Get buy price - this is what you'll pay
                 buy_price_data = self._client.get_price(token_id, side="BUY")
                 buy_price = float(buy_price_data.get("price", 0)) if isinstance(buy_price_data, dict) else 0
-                
-                print(f"[DEBUG] Current market BUY price: ${buy_price:.4f}")
                 
                 if buy_price == 0:
                     return TradeExecutionResult(
@@ -314,19 +310,6 @@ class TradingService:
                         executed_price=0.0,
                         executed_size=0.0,
                     )
-                
-                # Optional: Get sell price to show spread
-                try:
-                    sell_price_data = self._client.get_price(token_id, side="SELL")
-                    sell_price = float(sell_price_data.get("price", 0)) if isinstance(sell_price_data, dict) else 0
-                    if sell_price > 0:
-                        spread = buy_price - sell_price
-                        spread_pct = (spread / buy_price) * 100
-                        print(f"[DEBUG] Spread: ${spread:.4f} ({spread_pct:.1f}%)")
-                        if spread_pct > 10.0:
-                            print(f"[WARNING] Wide spread: {spread_pct:.1f}%")
-                except:
-                    pass
                 
             except Exception as price_error:
                 return TradeExecutionResult(
@@ -339,13 +322,10 @@ class TradingService:
 
             # Ensure stake meets Polymarket's $1 minimum
             if stake_amount < 1.0:
-                print(f"[DEBUG] Stake ${stake_amount:.2f} is below $1 minimum, adjusting to $1.01")
                 stake_amount = 1.01
             
             # DON'T calculate shares - just pass dollar amount
             # According to docs: For BUY side, amount should be dollar amount to spend
-            print(f"[DEBUG] Creating market order to spend ${stake_amount:.2f}")
-            print(f"[DEBUG] Expected to get ~{stake_amount/buy_price:.2f} shares at ${buy_price:.4f}/share")
             
             # Use MarketOrderArgs - pass DOLLAR amount for BUY
             MarketOrderArgs = getattr(clob_types, "MarketOrderArgs")
@@ -357,23 +337,18 @@ class TradingService:
                 order_type=FOK
             )
             
-            print(f"[DEBUG] MarketOrderArgs created: amount={stake_amount} (dollars), side=BUY, type=FOK")
-            
             # Refresh API credentials
             try:
                 creds = self._client.create_or_derive_api_creds()
                 self._client.set_api_creds(creds)
             except Exception as cred_error:
-                print(f"[DEBUG] Warning: Could not refresh credentials: {cred_error}")
+                pass
             
             # Sign and post market order
             signed_order = self._client.create_market_order(market_order)
             
-            print(f"[DEBUG] Posting MARKET order (FOK) for ${stake_amount:.2f}...")
-            
             try:
                 resp = self._client.post_order(signed_order, FOK)
-                print(f"[DEBUG] Market order response: {resp}")
             except Exception as post_error:
                 # Handle allowance errors with retry (same as limit orders)
                 error_detail = str(post_error)
@@ -394,7 +369,6 @@ class TradingService:
                         
                         # Retry
                         resp = self._client.post_order(signed_order, FOK)
-                        print(f"[DEBUG] Retry response: {resp}")
                     else:
                         return TradeExecutionResult(
                             success=False,
@@ -419,23 +393,22 @@ class TradingService:
                 error = resp.get("error")
                 
                 # Get actual execution amounts
-                # For BUY orders:
-                # - makingAmount = USDC you're paying (what you make/offer)
-                # - takingAmount = Shares you're receiving (what you take/get)
-                making_amount = resp.get("makingAmount")  # USDC spent
-                taking_amount = resp.get("takingAmount")  # Shares received
+                # For BUY market orders (confirmed via API testing):
+                # - makingAmount = USDC you're spending
+                # - takingAmount = Shares you're receiving
+                making_amount = resp.get("makingAmount")
+                taking_amount = resp.get("takingAmount")
                 
                 actual_price = 0.0
                 actual_size = 0.0
                 
                 if taking_amount and making_amount:
                     try:
-                        actual_spent = float(making_amount)  # USDC paid
+                        actual_spent = float(making_amount)  # USDC spent
                         actual_shares = float(taking_amount)  # Shares received
                         if actual_shares > 0:
                             actual_price = actual_spent / actual_shares
                             actual_size = actual_shares
-                            print(f"[DEBUG] Execution: ${actual_spent:.2f} for {actual_shares:.4f} shares @ ${actual_price:.4f}/share")
                     except (ValueError, ZeroDivisionError):
                         pass
                 
@@ -494,12 +467,7 @@ class TradingService:
 
             # Get current orderbook to determine market price
             # Token IDs from Polymarket API are decimal strings, use as-is
-            print(f"[DEBUG] Full token_id: {token_id}")
-            print(f"[DEBUG] Fetching orderbook for token_id: {token_id[:16]}...")
-            
             orderbook = self._client.get_order_book(token_id)
-            print(f"[DEBUG] Orderbook response type: {type(orderbook)}")
-            print(f"[DEBUG] Orderbook keys: {orderbook.keys() if isinstance(orderbook, dict) else 'not a dict'}")
             
             best_ask = self._get_best_ask(orderbook)
 
@@ -534,49 +502,29 @@ class TradingService:
 
             # Ensure API credentials are set (refresh if needed)
             try:
-                print(f"[DEBUG] Refreshing API credentials...")
                 creds = self._client.create_or_derive_api_creds()
                 self._client.set_api_creds(creds)
             except Exception as cred_error:
-                print(f"[DEBUG] Warning: Could not refresh credentials: {cred_error}")
+                pass
             
             # Note: We'll handle allowances if we get an error during order posting
             
             # Sign the order
             signed_order = self._client.create_order(order_args)
-            
-            # Debug: print order details
-            print(f"[DEBUG] Creating BUY order:")
-            print(f"[DEBUG]   Token ID: {token_id[:20]}...")
-            print(f"[DEBUG]   Limit Price: ${price:.4f} (best_ask: ${best_ask:.4f} + 2% slippage)")
-            print(f"[DEBUG]   Size: {size:.4f} shares")
-            print(f"[DEBUG]   Expected cost: ${size * price:.4f}")
-            print(f"[DEBUG] Posting order...")
 
             # Post as Good-Till-Cancelled order
             try:
                 resp = self._client.post_order(signed_order, OrderType.GTC)
-                print(f"[DEBUG] Order post response: {resp}")
             except Exception as post_error:
                 # Extract more details from the error
                 error_detail = str(post_error)
-                print(f"[DEBUG] Full post_error: {post_error}")
-                print(f"[DEBUG] Error type: {type(post_error)}")
-                print(f"[DEBUG] Error attributes: {dir(post_error)}")
                 
                 # Try to extract error details from PolyApiException
-                if hasattr(post_error, 'status_code'):
-                    print(f"[DEBUG] Status code: {post_error.status_code}")
                 if hasattr(post_error, 'error_message'):
-                    print(f"[DEBUG] Error message: {post_error.error_message}")
                     # Extract actual error from dict if available
                     if isinstance(post_error.error_message, dict):
                         actual_error = post_error.error_message.get('error', error_detail)
                         error_detail = actual_error
-                if hasattr(post_error, 'message'):
-                    print(f"[DEBUG] Message: {post_error.message}")
-                if hasattr(post_error, 'args'):
-                    print(f"[DEBUG] Args: {post_error.args}")
                 
                 # Handle allowance error with automatic approval
                 if "balance / allowance" in error_detail or "allowance" in error_detail.lower():
@@ -598,7 +546,6 @@ class TradingService:
                         # Retry the order post
                         try:
                             resp = self._client.post_order(signed_order, OrderType.GTC)
-                            print(f"[DEBUG] Retry order post response: {resp}")
                             
                             # Check response
                             if isinstance(resp, dict):
@@ -622,10 +569,7 @@ class TradingService:
                         except Exception as retry_error:
                             # Get detailed error for retry failure
                             retry_detail = str(retry_error)
-                            print(f"[DEBUG] Retry error: {retry_error}")
-                            print(f"[DEBUG] Retry error type: {type(retry_error)}")
                             if hasattr(retry_error, 'error_message'):
-                                print(f"[DEBUG] Retry error message: {retry_error.error_message}")
                                 if isinstance(retry_error.error_message, dict):
                                     retry_detail = retry_error.error_message.get('error', retry_detail)
                             
@@ -665,25 +609,23 @@ class TradingService:
                 error = resp.get("error")
                 
                 # Extract actual execution from Polymarket response
-                taking_amount = resp.get("takingAmount")  # USDC actually spent
-                making_amount = resp.get("makingAmount")  # Shares actually received
+                # For BUY limit orders (same as market orders):
+                # - makingAmount = USDC you're spending  
+                # - takingAmount = Shares you're receiving
+                making_amount = resp.get("makingAmount")  # USDC spent
+                taking_amount = resp.get("takingAmount")  # Shares received
                 
-                print(f"[DEBUG] BUY Response: success={success}, orderID={order_id}")
                 if taking_amount and making_amount:
-                    print(f"[DEBUG]   Actually spent: ${taking_amount} USDC")
-                    print(f"[DEBUG]   Actually received: {making_amount} shares")
-                    
                     try:
-                        actual_spent = float(taking_amount)
-                        actual_shares = float(making_amount)
+                        actual_spent = float(making_amount)
+                        actual_shares = float(taking_amount)
                         if actual_shares > 0:
                             actual_price = actual_spent / actual_shares
-                            print(f"[DEBUG]   Actual avg price: ${actual_price:.4f}/share (vs limit ${price:.4f})")
                             # Update with actual execution values
                             price = actual_price
                             size = actual_shares
                     except (ValueError, ZeroDivisionError):
-                        print(f"[DEBUG]   Could not parse execution amounts")
+                        pass
                 
                 # If error in response, include full response for debugging
                 if error and not success:
@@ -741,21 +683,10 @@ class TradingService:
             FOK = getattr(OrderType, "FOK")
 
             # Fetch orderbook to check spread and show info
-            print(f"[DEBUG] Checking spread for SELL order...")
             orderbook = self._client.get_order_book(token_id)
             
             best_bid = self._get_best_bid(orderbook)
             best_ask = self._get_best_ask(orderbook)
-            
-            # Show spread info
-            if best_bid and best_ask:
-                spread = best_ask - best_bid
-                spread_pct = (spread / best_ask) * 100 if best_ask > 0 else 0
-                print(f"[DEBUG] Market spread: ${spread:.4f} ({spread_pct:.1f}%)")
-                print(f"[DEBUG]   Best bid: ${best_bid:.4f} (you'll sell around this price)")
-                
-                if spread_pct > 10.0:
-                    print(f"[WARNING] Wide spread: {spread_pct:.1f}% - may get lower sell price!")
 
             if best_bid is None:
                 return TradeExecutionResult(
@@ -767,7 +698,6 @@ class TradingService:
                 )
             
             # Create limit sell order at best bid price (market taker)
-            print(f"[DEBUG] Creating limit SELL order (FOK) for {size:.4f} shares @ ${best_bid:.4f}...")
             order_args = OrderArgs(
                 token_id=token_id,
                 price=best_bid,  # Match best bid price exactly
@@ -781,13 +711,10 @@ class TradingService:
             # Post as Fill-Or-Kill (immediate execution or cancel)
             try:
                 resp = self._client.post_order(signed_order, FOK)
-                print(f"[DEBUG] SELL order response: {resp}")
             except Exception as post_error:
                 # Extract detailed error
                 error_detail = str(post_error)
-                print(f"[DEBUG] Sell post error: {post_error}")
                 if hasattr(post_error, 'error_message'):
-                    print(f"[DEBUG] Sell error message: {post_error.error_message}")
                     if isinstance(post_error.error_message, dict):
                         error_detail = post_error.error_message.get('error', error_detail)
                 
@@ -811,7 +738,6 @@ class TradingService:
                         # Retry the sell order
                         try:
                             resp = self._client.post_order(signed_order, FOK)
-                            print(f"[DEBUG] Retry sell response: {resp}")
                             
                             # Extract execution from retry
                             retry_price = 0.0
@@ -898,7 +824,6 @@ class TradingService:
                         if actual_shares > 0:
                             actual_price = actual_received / actual_shares
                             actual_size = actual_shares
-                            print(f"[DEBUG] SELL Execution: {actual_shares:.4f} shares for ${actual_received:.2f} @ ${actual_price:.4f}/share")
                     except (ValueError, ZeroDivisionError):
                         pass
                 
@@ -977,9 +902,7 @@ class TradingService:
             # Try using Polymarket API to get balance first
             if hasattr(self._client, 'get_balance_allowance'):
                 try:
-                    print(f"[DEBUG] Fetching balance from Polymarket API...")
                     balance_data = self._client.get_balance_allowance()
-                    print(f"[DEBUG] API balance data: {balance_data}")
                     # Extract USDC balance from response
                     if isinstance(balance_data, dict):
                         usdc_balance = float(balance_data.get('balance', 0)) / 1_000_000  # Convert from wei
@@ -988,7 +911,7 @@ class TradingService:
                             "address": self.funder if self.funder else self._address
                         }
                 except Exception as api_error:
-                    print(f"[DEBUG] API balance fetch failed: {api_error}, falling back to RPC...")
+                    pass
             
             # Fallback to RPC check
             import requests
@@ -1028,11 +951,7 @@ class TradingService:
                     balance = balance_raw / 1_000_000
                     
                     if balance > 0:
-                        print(f"[DEBUG] {token_name} balance: ${balance:.2f}")
                         total_balance += balance
-            
-            wallet_type = "proxy" if (self.funder and self.signature_type > 0) else "Direct EOA"
-            print(f"[DEBUG] Total {wallet_type} wallet balance: {check_address[:10]}... = ${total_balance:.2f}")
             
             return {
                 "usdc": total_balance,
@@ -1057,11 +976,9 @@ class TradingService:
         elif isinstance(orderbook, dict):
             asks = orderbook.get("asks", [])
         else:
-            print(f"[DEBUG] Unexpected orderbook type: {type(orderbook)}")
             return None
 
         if not asks:
-            print(f"[DEBUG] No asks found in orderbook")
             return None
 
         # Asks are typically sorted lowest to highest
@@ -1075,10 +992,8 @@ class TradingService:
             else:
                 best_ask = float(first_ask[0])
             
-            print(f"[DEBUG] Best ask found: {best_ask}")
             return best_ask
         except (IndexError, ValueError, TypeError, AttributeError) as e:
-            print(f"[DEBUG] Error parsing asks: {e}, asks={asks}")
             return None
 
     def _get_best_bid(self, orderbook) -> Optional[float]:
@@ -1096,11 +1011,9 @@ class TradingService:
         elif isinstance(orderbook, dict):
             bids = orderbook.get("bids", [])
         else:
-            print(f"[DEBUG] Unexpected orderbook type: {type(orderbook)}")
             return None
 
         if not bids:
-            print(f"[DEBUG] No bids found in orderbook")
             return None
 
         # Bids are typically sorted highest to lowest
@@ -1114,9 +1027,7 @@ class TradingService:
             else:
                 best_bid = float(first_bid[0])
             
-            print(f"[DEBUG] Best bid found: {best_bid}")
             return best_bid
         except (IndexError, ValueError, TypeError, AttributeError) as e:
-            print(f"[DEBUG] Error parsing bids: {e}, bids={bids}")
             return None
 

@@ -11,7 +11,7 @@ from prompt_toolkit.history import FileHistory
 from rich.console import Console
 
 from polly.config import load_config, DEFAULT_CONFIG_PATH, AppConfig
-from polly.models import Market
+from polly.models import Market, MarketGroup
 from polly.services.evaluator import PositionEvaluator
 from polly.services.polymarket import PolymarketService
 from polly.services.research import ResearchService
@@ -48,7 +48,7 @@ class CommandContext:
         self.trade_repo = TradeRepository(config.database_path)
         self.research_repo = ResearchRepository(config.database_path)
         self.trading_service = self._create_trading_service()
-        self.markets_cache: List[Market] = []
+        self.markets_cache: List[Market | MarketGroup] = []
     
     def _create_trading_service(self) -> Optional[TradingService]:
         """Create trading service if in real mode."""
