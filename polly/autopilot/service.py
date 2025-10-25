@@ -485,8 +485,15 @@ class AutopilotService:
             if not yes_outcome:
                 continue
             
-            # VALIDATE LONGSHOTS: Check for substance before entering
             current_odds = yes_outcome.price
+            
+            # FILTER: Skip positions with >80% odds (no edge, won't fill)
+            if current_odds > 0.80:
+                candidate_name = market.question.split("Will ")[-1].split(" win")[0] if "Will " in market.question else market.question[:30]
+                self.logger.info(f"      → Skip {candidate_name} @ {current_odds:.1%}: Too high (>80% filter)")
+                continue
+            
+            # VALIDATE LONGSHOTS: Check for substance before entering
             if current_odds < 0.05:  # Extreme longshot (<5%)
                 is_valid, reason = self.evaluator.validate_longshot(rec, current_odds)
                 if not is_valid:
