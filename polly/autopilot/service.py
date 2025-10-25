@@ -10,9 +10,10 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from polly.autopilot.logging_config import setup_logging
+from polly.autopilot.scanner import OpportunityScanner, Opportunity
 from polly.autopilot.wallet import WalletManager
 from polly.config import load_config, AppConfig
-from polly.models import Trade
+from polly.models import Market, MarketGroup, ResearchProgress, Trade
 from polly.services.evaluator import PositionEvaluator
 from polly.services.polymarket import PolymarketService
 from polly.services.research import ResearchService
@@ -53,6 +54,9 @@ class AutopilotService:
         
         # Initialize wallet manager
         self.wallet_manager = WalletManager(self.trading_service, self.config)
+        
+        # Initialize scanner
+        self.scanner = OpportunityScanner(self.trade_repo)
         
         self.logger.info("Autopilot service initialized")
         self.logger.info(f"Config: {config_path}")
@@ -141,8 +145,8 @@ class AutopilotService:
         # Step 2: Monitor existing positions
         await self.monitor_positions(balance)
         
-        # Step 3: Future - Scan for new opportunities
-        # await self.scan_opportunities(balance)
+        # Step 3: Scan for new opportunities
+        await self.scan_opportunities(balance)
         
         # Step 4: Future - Portfolio optimization
         # await self.optimize_portfolio(balance)
@@ -209,6 +213,284 @@ class AutopilotService:
             
         except Exception as e:
             self.logger.error(f"  ✗ Error monitoring position: {e}", exc_info=True)
+    
+    async def scan_opportunities(self, available_balance: float):
+        """Scan for new trading opportunities."""
+        
+        # Need minimum balance to trade
+        if available_balance < 20:
+            self.logger.info("🔎 Skipping opportunity scan (balance < $20)")
+            return
+        
+        # Check position count
+        active_trades = self.trade_repo.list_active(filter_mode="real")
+        if len(active_trades) >= 10:
+            self.logger.info("🔎 Skipping opportunity scan (max 10 positions)")
+            return
+        
+        try:
+            # Scan markets
+            opportunities = await self.scanner.scan_for_edge(
+                self.polymarket,
+                max_candidates=3  # Research top 3 each cycle
+            )
+            
+            if not opportunities:
+                self.logger.info("🔎 No new opportunities found this cycle")
+                return
+            
+            # Research and enter opportunities
+            for opp in opportunities:
+                await self._research_and_enter(opp, available_balance)
+                
+                # Update balance after entry
+                available_balance = await self.wallet_manager.get_available_balance()
+                
+                # Stop if balance too low
+                if available_balance < 20:
+                    self.logger.info("  Balance now < $20, stopping opportunity search")
+                    break
+            
+        except Exception as e:
+            self.logger.error(f"Error scanning opportunities: {e}", exc_info=True)
+    
+    async def _research_and_enter(self, opportunity: Opportunity, available_balance: float):
+        """Research an opportunity and enter positions if edge found.
+        
+        Args:
+            opportunity: The opportunity to research
+            available_balance: Current available wallet balance
+        """
+        title = opportunity.item.title if isinstance(opportunity.item, MarketGroup) else opportunity.item.question
+        self.logger.info(f"")
+        self.logger.info(f"🔍 Researching opportunity: {title[:60]}")
+        self.logger.info(f"   Score: {opportunity.score:.0f} ({opportunity.reason})")
+        
+        try:
+            # Run research
+            if isinstance(opportunity.item, MarketGroup):
+                research = await self.research_service.research_market_group(
+                    group=opportunity.item,
+                    callback=lambda p: self.logger.debug(f"   Research: {p.message}"),
+                )
+                self.logger.info(f"   ✓ Group research completed: {len(research.recommendations)} recommendations")
+            else:
+                research = await self.research_service.conduct_research(
+                    market=opportunity.item,
+                    callback=lambda p: self.logger.debug(f"   Research: {p.message}"),
+                )
+                self.logger.info(f"   ✓ Research completed: {research.prediction} @ {research.probability:.1%}")
+            
+            # Evaluate and enter positions
+            if isinstance(opportunity.item, MarketGroup):
+                await self._enter_group_positions(opportunity.item, research, available_balance)
+            else:
+                await self._enter_single_position(opportunity.item, research, available_balance)
+                
+        except Exception as e:
+            self.logger.error(f"   ✗ Error researching/entering: {e}", exc_info=True)
+    
+    async def _enter_single_position(self, market: Market, research, available_balance: float):
+        """Enter a position on a single binary market."""
+        
+        # Evaluate if should enter
+        evaluation = self.evaluator.evaluate(market, research)
+        
+        if evaluation.recommendation != "enter":
+            self.logger.info(f"   → PASS: {evaluation.rationale}")
+            return
+        
+        # Find the outcome token
+        outcome_token = None
+        for outcome in market.outcomes:
+            if outcome.outcome == research.prediction:
+                outcome_token = outcome
+                break
+        
+        if not outcome_token:
+            self.logger.error(f"   ✗ Could not find outcome token for {research.prediction}")
+            return
+        
+        # Calculate position size
+        current_exposure = sum(t.stake_amount for t in self.trade_repo.list_active(filter_mode="real"))
+        safe_stake = self.wallet_manager.calculate_position_size(
+            recommended_stake=self.config.trading.default_stake,
+            available_balance=available_balance,
+            current_exposure=current_exposure
+        )
+        
+        # Lower minimum for smaller balances
+        min_trade = 2.0  # $2 minimum (allows trading with small balances)
+        if safe_stake < min_trade:
+            self.logger.info(f"   → SKIP: Position too small (${safe_stake:.2f} < ${min_trade} minimum)")
+            return
+        
+        self.logger.info(f"   💰 Position sizing: Recommended ${self.config.trading.default_stake} → Actual ${safe_stake:.2f}")
+        self.logger.info(f"   ➕ ENTERING ${safe_stake:.2f} on {research.prediction} @ {outcome_token.price:.1%}")
+        
+        try:
+            # Execute trade
+            shares = safe_stake / outcome_token.price if outcome_token.price > 0 else 0
+            result = self.trading_service.execute_market_buy(outcome_token.token_id, shares)
+            
+            if not result.success:
+                self.logger.error(f"   ✗ Trade failed: {result.error}")
+                return
+            
+            # Record trade
+            trade = Trade(
+                id=None,
+                market_id=market.id,
+                question=market.question,
+                category=market.category,
+                selected_option=research.prediction,
+                entry_odds=result.executed_price,
+                stake_amount=safe_stake,
+                entry_timestamp=datetime.now(tz=timezone.utc),
+                predicted_probability=research.probability,
+                confidence=research.confidence,
+                research_id=None,
+                status="active",
+                resolves_at=market.end_date,
+                actual_outcome=None,
+                profit_loss=None,
+                closed_at=None,
+                trade_mode="real",
+                order_id=result.order_id,
+            )
+            
+            saved_trade = self.trade_repo.record_trade(trade)
+            
+            self.logger.info(f"   ✓ Position #{saved_trade.id} created: ${safe_stake:.2f} @ {result.executed_price:.1%}")
+            self.logger.info(f"   📊 Edge: {research.probability - result.executed_price:+.1%}, Confidence: {research.confidence:.0f}%")
+            
+            # Log to trades.log
+            logging.getLogger("trades").info(
+                f"ENTER | #{saved_trade.id} | {market.question[:50]} | "
+                f"${safe_stake:.2f} @ {result.executed_price:.1%} | "
+                f"Edge: {research.probability - result.executed_price:+.1%}"
+            )
+            
+        except Exception as e:
+            self.logger.error(f"   ✗ Error executing trade: {e}", exc_info=True)
+    
+    async def _enter_group_positions(self, group: MarketGroup, research, available_balance: float):
+        """Enter multiple positions from grouped event research."""
+        
+        if not research.recommendations:
+            self.logger.info(f"   → PASS: No recommendations from research")
+            return
+        
+        # Filter to entry-suggested only
+        to_enter = [r for r in research.recommendations if r.entry_suggested]
+        
+        if not to_enter:
+            self.logger.info(f"   → PASS: No positions suggested for entry")
+            return
+        
+        self.logger.info(f"   💼 Group strategy: {len(to_enter)} positions recommended")
+        
+        # Calculate total and scale to balance
+        total_recommended = sum(r.suggested_stake for r in to_enter)
+        current_exposure = sum(t.stake_amount for t in self.trade_repo.list_active(filter_mode="real"))
+        
+        # Can only use 80% of balance
+        max_deployable = available_balance * 0.80
+        scale_factor = min(1.0, max_deployable / total_recommended) if total_recommended > 0 else 0
+        
+        self.logger.info(f"   💰 Scaling: ${total_recommended:.0f} recommended → ${total_recommended * scale_factor:.2f} actual")
+        
+        entered_positions = []
+        for rec in to_enter:
+            # Scale the stake
+            scaled_stake = rec.suggested_stake * scale_factor
+            
+            # Apply position limits
+            safe_stake = self.wallet_manager.calculate_position_size(
+                recommended_stake=scaled_stake,
+                available_balance=available_balance,
+                current_exposure=current_exposure
+            )
+            
+            # Lower minimum for smaller balances
+            min_trade = 2.0  # $2 minimum
+            if safe_stake < min_trade:
+                self.logger.info(f"      → Skip: {rec.market_question[:40]} (${safe_stake:.2f} < ${min_trade})")
+                continue
+            
+            # Find the market
+            market = next((m for m in group.markets if m.id == rec.market_id), None)
+            if not market:
+                self.logger.warning(f"      → Skip: Could not find market {rec.market_id}")
+                continue
+            
+            # Find Yes outcome
+            yes_outcome = next((o for o in market.outcomes if o.outcome.lower() in ('yes', 'y')), None)
+            if not yes_outcome:
+                continue
+            
+            candidate_name = market.question.split("Will ")[-1].split(" win")[0] if "Will " in market.question else market.question[:30]
+            
+            self.logger.info(f"      ➕ Entering ${safe_stake:.2f} on {candidate_name} @ {yes_outcome.price:.1%}")
+            
+            try:
+                # Execute
+                shares = safe_stake / yes_outcome.price if yes_outcome.price > 0 else 0
+                result = self.trading_service.execute_market_buy(yes_outcome.token_id, shares)
+                
+                if not result.success:
+                    self.logger.error(f"      ✗ Failed: {result.error}")
+                    continue
+                
+                # Record trade
+                trade = Trade(
+                    id=None,
+                    market_id=market.id,
+                    question=market.question,
+                    category=group.category,
+                    selected_option="Yes",
+                    entry_odds=result.executed_price,
+                    stake_amount=safe_stake,
+                    entry_timestamp=datetime.now(tz=timezone.utc),
+                    predicted_probability=rec.probability,
+                    confidence=rec.confidence,
+                    research_id=None,
+                    status="active",
+                    resolves_at=group.end_date,
+                    actual_outcome=None,
+                    profit_loss=None,
+                    closed_at=None,
+                    trade_mode="real",
+                    order_id=result.order_id,
+                    event_id=group.id,
+                    event_title=group.title,
+                    is_grouped=True,
+                    group_strategy="multi_position_hedge"
+                )
+                
+                saved = self.trade_repo.record_trade(trade)
+                entered_positions.append(saved)
+                
+                self.logger.info(f"      ✓ Position #{saved.id} created")
+                
+                # Update available balance and exposure
+                available_balance -= safe_stake
+                current_exposure += safe_stake
+                
+            except Exception as e:
+                self.logger.error(f"      ✗ Error: {e}", exc_info=True)
+        
+        if entered_positions:
+            total_deployed = sum(t.stake_amount for t in entered_positions)
+            self.logger.info(f"   ✓ Entered {len(entered_positions)} positions, total: ${total_deployed:.2f}")
+            
+            # Log to trades.log
+            logging.getLogger("trades").info(
+                f"GROUP_ENTER | {group.title[:50]} | "
+                f"{len(entered_positions)} positions | ${total_deployed:.2f}"
+            )
+        else:
+            self.logger.info(f"   → No positions entered (all too small or failed)")
     
     async def check_risk_limits(self):
         """Check portfolio-level risk limits."""
